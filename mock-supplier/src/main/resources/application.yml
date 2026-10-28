@@ -1,0 +1,34 @@
+server:
+  port: 8090
+
+spring:
+  application:
+    name: mock-supplier
+  threads:
+    virtual:
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+# Behaviour is chosen by the last digits of the destination number (first matching rule wins);
+# everything else succeeds immediately.
+mock-supplier:
+  # How long "slow" behaviours wait: longer than the switch's read timeout, so it times out.
+  delay: ${MOCK_SUPPLIER_DELAY:3s}
+  rules:
+    - destination-suffix: "11"
+      behavior: FAIL
+    - destination-suffix: "22"
+      behavior: TIMEOUT_THEN_SUCCESS
+    - destination-suffix: "33"
+      behavior: TIMEOUT_THEN_FAIL
+    - destination-suffix: "44"
+      behavior: PENDING_THEN_SUCCESS
+    - destination-suffix: "55"
+      behavior: SERVER_ERROR_AFTER_SUCCESS
+    - destination-suffix: "66"
+      behavior: REJECT

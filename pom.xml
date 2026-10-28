@@ -10,7 +10,9 @@
     <packaging>pom</packaging>
     <name>payment-switch (aggregator)</name>
 
+    <!-- mock-supplier first: app's end-to-end tests run its packaged jar in a container. -->
     <modules>
+        <module>mock-supplier</module>
         <module>app</module>
     </modules>
 </project>
