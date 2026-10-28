@@ -12,3 +12,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Stay on the Java 21 LTS line; JDK upgrades are a deliberate decision, not a bot PR.
+    ignore:
+      - dependency-name: eclipse-temurin
+        update-types: ["version-update:semver-major"]
+      # The JDK lives in the tag suffix (3.9-eclipse-temurin-21), which Dependabot cannot bump safely.
+      - dependency-name: maven

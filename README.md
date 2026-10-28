@@ -1,5 +1,7 @@
 # payment-switch
 
+[![CI](https://github.com/raisenbk/payment-switch/actions/workflows/ci.yml/badge.svg)](https://github.com/raisenbk/payment-switch/actions/workflows/ci.yml)
+
 A mini payment switch / biller aggregator. Merchants submit top-up, data and voucher requests;
 the switch debits their balance through a double-entry ledger, routes the request to a supplier,
 resolves ambiguous (timed-out) results safely and notifies the merchant by webhook.
