@@ -8,7 +8,7 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B -q -pl app dependency:go-offline
 COPY app/src app/src
 RUN --mount=type=cache,target=/root/.m2 mvn -B -q -pl app package -DskipTests
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:24-jre
 RUN useradd --system --uid 10001 app
 WORKDIR /opt/app
 COPY --from=build /workspace/app/target/payment-switch-app-*.jar app.jar
