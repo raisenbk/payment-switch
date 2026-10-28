@@ -5,3 +5,13 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:paymentswitch}
     username: ${DB_USER:paymentswitch}
     password: ${DB_PASSWORD:paymentswitch}
+  flyway:
+    # Adds the demo merchant, products and supplier mapping (see db/demo/R__demo_data.sql).
+    locations: classpath:db/migration,classpath:db/demo
+
+payment-switch:
+  suppliers:
+    mocka:
+      base-url: ${MOCK_SUPPLIER_URL:http://localhost:8090}/suppliers/MOCKA
+      connect-timeout: 1s
+      read-timeout: 5s

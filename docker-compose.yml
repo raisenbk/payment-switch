@@ -27,8 +27,31 @@ services:
       timeout: 3s
       retries: 10
 
+  mock-supplier:
+    build:
+      context: .
+      args:
+        MODULE: mock-supplier
+    environment:
+      MOCK_SUPPLIER_DELAY: ${MOCK_SUPPLIER_DELAY:-15s}
+    ports:
+      - "${MOCK_SUPPLIER_PORT:-8090}:8090"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8090/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   app:
-    build: .
+    build:
+      context: .
+      args:
+        MODULE: app
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/actuator/health/liveness"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     environment:
       SPRING_PROFILES_ACTIVE: local
       DB_HOST: postgres
@@ -38,12 +61,15 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-paymentswitch}
       # Local-development key only; set your own in .env for anything else.
       SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:-JNZXg1RmDZjrHIsESBJhQXphJL8/m69RMlf1pH8LoZo=}
+      MOCK_SUPPLIER_URL: http://mock-supplier:8090
     ports:
       - "${APP_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      mock-supplier:
         condition: service_healthy
 
 volumes:
