@@ -1,0 +1,7 @@
+# Local development against the docker-compose stack. Values can be overridden via environment
+# variables (see .env.example); the defaults only work for the throwaway local database.
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:paymentswitch}
+    username: ${DB_USER:paymentswitch}
+    password: ${DB_PASSWORD:paymentswitch}

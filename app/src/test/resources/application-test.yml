@@ -1,0 +1,5 @@
+# Datasource is provided by Testcontainers via @ServiceConnection (see AbstractIntegrationTest).
+logging:
+  level:
+    org.testcontainers: INFO
+    com.paymentswitch: DEBUG
