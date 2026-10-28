@@ -43,5 +43,11 @@ Actions, Micrometer + Prometheus + Grafana, OpenTelemetry, k6. Kafka/Kubernetes 
 - Build + test: `./mvnw verify` (needs JDK 21), or `./scripts/mvn-docker.sh verify` (Docker only).
 - Integration tests extend `AbstractIntegrationTest` (shared PostgreSQL Testcontainer).
 - Errors: throw `ApiException` subclasses; `GlobalExceptionHandler` renders `ErrorResponse`.
+- `/v1/**` is HMAC-authenticated (`HmacAuthenticationFilter`); get the caller with
+  `@AuthenticationPrincipal MerchantPrincipal`. Integration tests sign real HTTP requests via
+  `support.SignedRequests` and create isolated merchants via `support.TestMerchants`.
+- Mutating endpoints wrap their work in `IdempotencyService.execute(...)` with
+  `RequestFingerprint.of(request)`. The action must be short local DB work (see ADR-002).
+- Spring Boot 4 notes: Jackson 3 (`tools.jackson.*`); `@WebMvcTest` does not load Spring Security.
 - Shared secrets (API HMAC secret, webhook secret) must be **encrypted**, not hashed: the
   server needs the clear value to compute HMACs.

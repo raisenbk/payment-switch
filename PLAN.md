@@ -188,15 +188,15 @@ Legend: `[ ]` todo · `[x]` done. Each phase ends with a DoD that must be fully 
 
 ### Phase 2 — Merchant Auth & Idempotency (Week 2)
 
-- [ ] API key lookup + HMAC-SHA256 signature verification (canonical string: method, path, timestamp, body hash)
-- [ ] Timestamp tolerance window (replay protection)
-- [ ] Constant-time signature comparison
-- [ ] Spring Security filter chain for `/v1/**`
-- [ ] `idempotency_keys` migration + service (store request hash and response)
-- [ ] Same key + same body → replay stored response; same key + different body → `409`
-- [ ] Concurrent requests with the same key → only one executes (DB unique constraint or advisory lock)
-- [ ] Tests: valid/invalid signature, expired timestamp, replayed request, concurrent same key
-- [ ] ADR-002: HMAC request signing and idempotency design
+- [x] API key lookup + HMAC-SHA256 signature verification (canonical string: method, path, timestamp, body hash)
+- [x] Timestamp tolerance window (replay protection)
+- [x] Constant-time signature comparison
+- [x] Spring Security filter chain for `/v1/**`
+- [x] `idempotency_keys` migration + service (store request hash and response)
+- [x] Same key + same body → replay stored response; same key + different body → `409`
+- [x] Concurrent requests with the same key → only one executes (DB unique constraint or advisory lock)
+- [x] Tests: valid/invalid signature, expired timestamp, replayed request, concurrent same key
+- [x] ADR-002: HMAC request signing and idempotency design
 
 **DoD:** 50 parallel identical requests create exactly one record; invalid signatures always return `401`.
 
@@ -342,9 +342,9 @@ Rules: no `Thread.sleep` for synchronization (use Awaitility); tests must be det
 
 ## 8. Security Checklist
 
-- [ ] API secrets stored hashed/encrypted, never logged
-- [ ] HMAC comparison is constant-time
-- [ ] Timestamp window enforced (replay protection)
+- [x] API secrets stored hashed/encrypted, never logged
+- [x] HMAC comparison is constant-time
+- [x] Timestamp window enforced (replay protection)
 - [ ] Input validation on all DTOs (Bean Validation)
 - [ ] No sensitive data in error messages
 - [x] Dependency scan in CI (e.g., OWASP dependency-check or Dependabot)
@@ -373,3 +373,4 @@ Rules: no `Thread.sleep` for synchronization (use Awaitility); tests must be det
 | Date | Phase | Notes / Decisions |
 |---|---|---|
 | 2026-10-28 | 1 | Spring Boot 4.1 instead of 3.x. API/webhook secrets are encrypted, not hashed (HMAC needs the clear secret): columns `secret_ciphertext`, `webhook_secret_ciphertext`. Kubernetes deferred to Phase 9. |
+| 2026-10-28 | 2 | Idempotency key claimed with INSERT ON CONFLICT in the same DB transaction as the action (no IN_PROGRESS status; failed requests do not consume the key). `response_body` is JSON (byte-identical replays). Unsigned routes outside /v1 are denied by default. 50-parallel test verified to fail against a naive check-then-insert implementation. See ADR-002. |
