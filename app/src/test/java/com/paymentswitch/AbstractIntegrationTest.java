@@ -1,6 +1,7 @@
 package com.paymentswitch;
 
 import com.paymentswitch.support.IdempotencyProbeController;
+import com.paymentswitch.support.LedgerAssertions;
 import com.paymentswitch.support.TestMerchants;
 import java.net.URI;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -19,7 +20,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  */
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import({TestMerchants.class, IdempotencyProbeController.class})
+@Import({TestMerchants.class, IdempotencyProbeController.class, LedgerAssertions.class})
 public abstract class AbstractIntegrationTest {
 
     @ServiceConnection
