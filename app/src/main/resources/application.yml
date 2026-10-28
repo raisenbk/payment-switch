@@ -3,6 +3,9 @@ spring:
     name: payment-switch
   profiles:
     default: local
+  autoconfigure:
+    # Merchants authenticate with HMAC signatures; no username/password users exist.
+    exclude: org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
   jpa:
     open-in-view: false
     hibernate:
@@ -28,6 +31,14 @@ management:
       probes:
         enabled: true
 
+payment-switch:
+  auth:
+    timestamp-tolerance: 5m
+    max-body-size: 64KB
+  crypto:
+    # Base64-encoded 32-byte AES key for secrets at rest. Generate with: openssl rand -base64 32
+    secret-key: ${SECRET_ENCRYPTION_KEY}
+
 logging:
   pattern:
-    correlation: "[traceId=%X{traceId:-}] "
+    correlation: "[traceId=%X{traceId:-} merchantId=%X{merchantId:-}] "

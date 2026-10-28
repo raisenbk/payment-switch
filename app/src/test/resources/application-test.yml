@@ -1,4 +1,13 @@
 # Datasource is provided by Testcontainers via @ServiceConnection (see AbstractIntegrationTest).
+spring:
+  flyway:
+    locations: classpath:db/migration,classpath:db/testmigration
+
+payment-switch:
+  crypto:
+    # Test-only key. Never used outside the test profile.
+    secret-key: 7L/6T3v6cowfXHu0UvIU4He4pU1J7F2JeHdUD0TZtgk=
+
 logging:
   level:
     org.testcontainers: INFO

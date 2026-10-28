@@ -36,6 +36,8 @@ services:
       DB_NAME: ${DB_NAME:-paymentswitch}
       DB_USER: ${DB_USER:-paymentswitch}
       DB_PASSWORD: ${DB_PASSWORD:-paymentswitch}
+      # Local-development key only; set your own in .env for anything else.
+      SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:-JNZXg1RmDZjrHIsESBJhQXphJL8/m69RMlf1pH8LoZo=}
     ports:
       - "${APP_PORT:-8080}:8080"
     depends_on:

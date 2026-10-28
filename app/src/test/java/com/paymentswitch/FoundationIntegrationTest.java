@@ -37,13 +37,13 @@ class FoundationIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void unknownRouteReturnsConsistentErrorJson() {
+    void unauthenticatedApiRequestReturnsConsistentErrorJson() {
         MvcTestResult result = mvc.get().uri("/v1/does-not-exist")
                 .header("X-Request-Id", "test-trace-0001")
                 .exchange();
 
-        assertThat(result).hasStatus(HttpStatus.NOT_FOUND).hasHeader("X-Request-Id", "test-trace-0001");
-        assertThat(result).bodyJson().extractingPath("$.code").isEqualTo("NOT_FOUND");
+        assertThat(result).hasStatus(HttpStatus.UNAUTHORIZED).hasHeader("X-Request-Id", "test-trace-0001");
+        assertThat(result).bodyJson().extractingPath("$.code").isEqualTo("AUTHENTICATION_FAILED");
         assertThat(result).bodyJson().extractingPath("$.traceId").isEqualTo("test-trace-0001");
         assertThat(result).bodyJson().extractingPath("$.message").isNotNull();
     }
