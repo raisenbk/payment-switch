@@ -48,6 +48,11 @@ Actions, Micrometer + Prometheus + Grafana, OpenTelemetry, k6. Kafka/Kubernetes 
   `support.SignedRequests` and create isolated merchants via `support.TestMerchants`.
 - Mutating endpoints wrap their work in `IdempotencyService.execute(...)` with
   `RequestFingerprint.of(request)`. The action must be short local DB work (see ADR-002).
+- Money moves only through `LedgerService` (`topUp`, `hold`, `release`, `capture`,
+  `reverseTopUp`, `getBalance`); amounts are `common.money.Money` (long minor units + currency).
+  Ledger methods join the caller's transaction and need READ COMMITTED (ADR-004). Journals and
+  entries are immutable at the DB level. Integration tests that touch money should end with
+  `LedgerAssertions.assertGlobalInvariants()`.
 - Spring Boot 4 notes: Jackson 3 (`tools.jackson.*`); `@WebMvcTest` does not load Spring Security.
 - Shared secrets (API HMAC secret, webhook secret) must be **encrypted**, not hashed: the
   server needs the clear value to compute HMACs.

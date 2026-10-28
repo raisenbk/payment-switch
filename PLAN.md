@@ -207,14 +207,14 @@ Legend: `[ ]` todo · `[x]` done. Each phase ends with a DoD that must be fully 
 
 ### Phase 3 — Ledger (Week 3)
 
-- [ ] Migrations: `ledger_accounts`, `ledger_journals`, `ledger_entries` (+ DB check/trigger or service guard for balanced journals)
-- [ ] Ledger service API: `topUp`, `hold`, `release`, `capture`, `getBalance`
-- [ ] Journals are immutable; corrections use reversing journals
-- [ ] Insufficient balance → domain exception, no partial writes
-- [ ] Locking strategy implemented (pessimistic or optimistic with retry)
-- [ ] Concurrency test: 1000 parallel holds on one merchant, final balance exactly correct, never negative
-- [ ] Property-style test: sum of all debits = sum of all credits across the DB
-- [ ] ADR-003: ledger over mutable balance column; ADR-004: locking strategy
+- [x] Migrations: `ledger_accounts`, `ledger_journals`, `ledger_entries` (+ DB check/trigger or service guard for balanced journals)
+- [x] Ledger service API: `topUp`, `hold`, `release`, `capture`, `getBalance`
+- [x] Journals are immutable; corrections use reversing journals
+- [x] Insufficient balance → domain exception, no partial writes
+- [x] Locking strategy implemented (pessimistic or optimistic with retry)
+- [x] Concurrency test: 1000 parallel holds on one merchant, final balance exactly correct, never negative
+- [x] Property-style test: sum of all debits = sum of all credits across the DB
+- [x] ADR-003: ledger over mutable balance column; ADR-004: locking strategy
 
 **DoD:** concurrency + invariant tests pass repeatedly (run 10×, zero flakiness).
 
@@ -374,3 +374,4 @@ Rules: no `Thread.sleep` for synchronization (use Awaitility); tests must be det
 |---|---|---|
 | 2026-10-28 | 1 | Spring Boot 4.1 instead of 3.x. API/webhook secrets are encrypted, not hashed (HMAC needs the clear secret): columns `secret_ciphertext`, `webhook_secret_ciphertext`. Kubernetes deferred to Phase 9. |
 | 2026-10-28 | 2 | Idempotency key claimed with INSERT ON CONFLICT in the same DB transaction as the action (no IN_PROGRESS status; failed requests do not consume the key). `response_body` is JSON (byte-identical replays). Unsigned routes outside /v1 are denied by default. 50-parallel test verified to fail against a naive check-then-insert implementation. See ADR-002. |
+| 2026-10-28 | 3 | No stored balance at all: balances = SUM(entries), per-merchant FOR NO KEY UPDATE lock on the balance account, system accounts never locked (no hot rows). Added `ledger_holds` (hold lifecycle) and `CASH` account (counter-side of top-ups), not in the original schema. DB triggers enforce balanced single-currency journals and immutability. Ledger tests passed 10/10 runs; removing the lock makes the 1000-hold test fail (601 successes). See ADR-003/004. |

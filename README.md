@@ -8,7 +8,7 @@ resolves ambiguous (timed-out) results safely and notifies the merchant by webho
 
 > Portfolio project. No real money, suppliers, credentials or customer data.
 
-**Status:** Phase 2 (merchant auth & idempotency) — see [PLAN.md](PLAN.md) for the roadmap.
+**Status:** Phase 3 (double-entry ledger) — see [PLAN.md](PLAN.md) for the roadmap.
 
 ## Quick start
 
@@ -73,3 +73,5 @@ Every error response has the same shape, and the trace id is also returned in `X
 
 - [ADR-001: Modular monolith over microservices](docs/adr/0001-modular-monolith.md)
 - [ADR-002: HMAC request signing and idempotency](docs/adr/0002-hmac-signing-and-idempotency.md)
+- [ADR-003: Double-entry ledger instead of a mutable balance column](docs/adr/0003-double-entry-ledger.md)
+- [ADR-004: Ledger locking strategy](docs/adr/0004-ledger-locking-strategy.md)
