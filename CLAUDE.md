@@ -53,6 +53,13 @@ Actions, Micrometer + Prometheus + Grafana, OpenTelemetry, k6. Kafka/Kubernetes 
   Ledger methods join the caller's transaction and need READ COMMITTED (ADR-004). Journals and
   entries are immutable at the DB level. Integration tests that touch money should end with
   `LedgerAssertions.assertGlobalInvariants()`.
+- Transaction status changes go only through `TransactionStateMachine.transition(...)`
+  (validated, compare-and-set, event row). Supplier outcomes are `SupplierResult`
+  (`Success`/`Failed`/`Unknown`); anything ambiguous is `Unknown` and keeps the hold (ADR-005).
+- Build from the repository root: the app's integration tests run `mock-supplier/target/mock-supplier.jar`
+  in a container, so `-pl app` alone needs that jar built first (`-am` or a full `verify`).
+- Local demo: `docker compose up --build -d`, then `./scripts/signed-curl.sh` (demo merchant seeded
+  by `db/demo/R__demo_data.sql`, local profile only).
 - Spring Boot 4 notes: Jackson 3 (`tools.jackson.*`); `@WebMvcTest` does not load Spring Security.
 - Shared secrets (API HMAC secret, webhook secret) must be **encrypted**, not hashed: the
   server needs the clear value to compute HMACs.

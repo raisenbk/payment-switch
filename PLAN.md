@@ -225,15 +225,15 @@ Legend: `[ ]` todo · `[x]` done. Each phase ends with a DoD that must be fully 
 
 ### Phase 4 — Transaction State Machine & Mock Supplier (Week 4)
 
-- [ ] `transactions` + `transaction_events` migrations
-- [ ] State machine with explicit allowed transitions; illegal transition throws
-- [ ] `POST /v1/transactions` and `GET /v1/transactions/{id}`
-- [ ] Creating a transaction: validate product, place hold, store `PENDING` in one DB transaction
-- [ ] `SupplierGateway` interface (`submit`, `inquiry`) with typed results: `SUCCESS`, `FAILED(code)`, `UNKNOWN`
-- [ ] `mock-supplier` app: configurable behavior per destination/amount (success, definitive fail, timeout, delayed success, duplicate response)
-- [ ] Supplier adapter with HTTP client, connect/read timeouts, mapping of errors → typed results
-- [ ] End-to-end test: success path and definitive-failure path (hold released)
-- [ ] ADR-005: why timeout maps to `UNKNOWN`, not `FAILED`
+- [x] `transactions` + `transaction_events` migrations
+- [x] State machine with explicit allowed transitions; illegal transition throws
+- [x] `POST /v1/transactions` and `GET /v1/transactions/{id}`
+- [x] Creating a transaction: validate product, place hold, store `PENDING` in one DB transaction
+- [x] `SupplierGateway` interface (`submit`, `inquiry`) with typed results: `SUCCESS`, `FAILED(code)`, `UNKNOWN`
+- [x] `mock-supplier` app: configurable behavior per destination/amount (success, definitive fail, timeout, delayed success, duplicate response)
+- [x] Supplier adapter with HTTP client, connect/read timeouts, mapping of errors → typed results
+- [x] End-to-end test: success path and definitive-failure path (hold released)
+- [x] ADR-005: why timeout maps to `UNKNOWN`, not `FAILED`
 
 **DoD:** end-to-end flow works against the mock supplier; every transition is in `transaction_events`.
 
@@ -375,3 +375,4 @@ Rules: no `Thread.sleep` for synchronization (use Awaitility); tests must be det
 | 2026-10-28 | 1 | Spring Boot 4.1 instead of 3.x. API/webhook secrets are encrypted, not hashed (HMAC needs the clear secret): columns `secret_ciphertext`, `webhook_secret_ciphertext`. Kubernetes deferred to Phase 9. |
 | 2026-10-28 | 2 | Idempotency key claimed with INSERT ON CONFLICT in the same DB transaction as the action (no IN_PROGRESS status; failed requests do not consume the key). `response_body` is JSON (byte-identical replays). Unsigned routes outside /v1 are denied by default. 50-parallel test verified to fail against a naive check-then-insert implementation. See ADR-002. |
 | 2026-10-28 | 3 | No stored balance at all: balances = SUM(entries), per-merchant FOR NO KEY UPDATE lock on the balance account, system accounts never locked (no hot rows). Added `ledger_holds` (hold lifecycle) and `CASH` account (counter-side of top-ups), not in the original schema. DB triggers enforce balanced single-currency journals and immutability. Ledger tests passed 10/10 runs; removing the lock makes the 1000-hold test fail (601 successes). See ADR-003/004. |
+| 2026-10-28 | 4 | POST returns 202 PENDING; supplier processing starts after commit via an async AFTER_COMMIT listener (in-memory, replaced by the outbox in Phase 5; until then a crash after commit leaves the transaction PENDING). Supplier cost frozen on the transaction at routing time. Connection refused on submit = FAILED (nothing sent); read timeout/5xx/pending = UNKNOWN; inquiry 404 = FAILED (supplier contract). mock-supplier is chosen by destination suffix; e2e tests run its real jar via Testcontainers. Local profile seeds a demo merchant + products. See ADR-005. |
