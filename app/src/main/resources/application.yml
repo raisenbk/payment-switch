@@ -41,4 +41,4 @@ payment-switch:
 
 logging:
   pattern:
-    correlation: "[traceId=%X{traceId:-} merchantId=%X{merchantId:-}] "
+    correlation: "[traceId=%X{traceId:-} merchantId=%X{merchantId:-} transactionId=%X{transactionId:-}] "

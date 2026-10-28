@@ -4,6 +4,11 @@ spring:
     locations: classpath:db/migration,classpath:db/testmigration
 
 payment-switch:
+  suppliers:
+    mocka:
+      # base-url is set by AbstractIntegrationTest (mock-supplier container)
+      connect-timeout: 1s
+      read-timeout: 1s
   crypto:
     # Test-only key. Never used outside the test profile.
     secret-key: 7L/6T3v6cowfXHu0UvIU4He4pU1J7F2JeHdUD0TZtgk=
