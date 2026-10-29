@@ -5,6 +5,8 @@
 -- from docker-compose.yml):
 --   X-Api-Key: pk_demo_local
 --   secret:    sk_demo_local_only_not_secret
+-- Its webhooks go to the demo receiver in mock-supplier, signed with
+--   webhook secret: whsec_demo_local_only_not_secret
 
 INSERT INTO suppliers (code, name) VALUES
     ('MOCKA', 'Mock Supplier A')
@@ -22,9 +24,12 @@ SELECT s.id, p.id, 'A-' || p.code, p.base_price - 500, 'IDR', 1
  WHERE s.code = 'MOCKA' AND p.code IN ('PULSA10', 'PULSA25', 'DATA5GB')
 ON CONFLICT (supplier_id, product_id) DO NOTHING;
 
-INSERT INTO merchants (id, name) VALUES
-    ('00000000-0000-0000-0000-00000000d3e0', 'Demo Merchant')
-ON CONFLICT (id) DO NOTHING;
+INSERT INTO merchants (id, name, callback_url, webhook_secret_ciphertext) VALUES
+    ('00000000-0000-0000-0000-00000000d3e0', 'Demo Merchant', 'http://mock-supplier:8090/webhooks/demo',
+     'v1:vYk5DmOvQxIuKvcohhV1yP7QHnRL9iRHwfRyeTDI+3o6jKUi3oTGos63+fFAvV2ZFiDwzlQh7+wogZZ4')
+ON CONFLICT (id) DO UPDATE
+    SET callback_url = EXCLUDED.callback_url,
+        webhook_secret_ciphertext = EXCLUDED.webhook_secret_ciphertext;
 
 INSERT INTO api_credentials (merchant_id, api_key, secret_ciphertext) VALUES
     ('00000000-0000-0000-0000-00000000d3e0', 'pk_demo_local',

@@ -21,6 +21,16 @@ payment-switch:
     max-delay: 1s
     max-window: 6s
     verify-after: 3s
+  webhooks:
+    poll-interval: 100ms
+    lease: 5s
+    max-attempts: 4
+    initial-delay: 200ms
+    max-delay: 800ms
+    read-timeout: 1s
+  admin:
+    # Test-only token. Never used outside the test profile.
+    token: test-admin-token-not-secret
   crypto:
     # Test-only key. Never used outside the test profile.
     secret-key: 7L/6T3v6cowfXHu0UvIU4He4pU1J7F2JeHdUD0TZtgk=

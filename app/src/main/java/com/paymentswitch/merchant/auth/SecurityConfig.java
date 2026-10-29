@@ -16,15 +16,16 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
 
 /**
- * Two stateless chains:
+ * Three stateless chains:
  * <ol>
  *   <li>{@code /v1/**}: merchant API, HMAC-signed requests only.</li>
+ *   <li>{@code /admin/**}: operator API, {@code X-Admin-Token} only (disabled when no token is set).</li>
  *   <li>Everything else: health/info are public, all other routes are denied by default, so a
  *       new endpoint outside {@code /v1} stays closed until it gets its own chain.</li>
  * </ol>
  */
 @Configuration
-@EnableConfigurationProperties(AuthProperties.class)
+@EnableConfigurationProperties({AuthProperties.class, AdminProperties.class})
 class SecurityConfig {
 
     @Bean
@@ -49,6 +50,17 @@ class SecurityConfig {
 
     @Bean
     @Order(2)
+    SecurityFilterChain adminChain(HttpSecurity http, AuthenticationEntryPoint entryPoint,
+            AdminProperties properties) throws Exception {
+        return stateless(http, entryPoint)
+                .securityMatcher("/admin/**")
+                .addFilterBefore(new AdminTokenAuthenticationFilter(properties, entryPoint), AuthorizationFilter.class)
+                .authorizeHttpRequests(auth -> auth.anyRequest().hasRole("ADMIN"))
+                .build();
+    }
+
+    @Bean
+    @Order(3)
     SecurityFilterChain defaultChain(HttpSecurity http, AuthenticationEntryPoint entryPoint) throws Exception {
         return stateless(http, entryPoint)
                 .authorizeHttpRequests(auth -> auth

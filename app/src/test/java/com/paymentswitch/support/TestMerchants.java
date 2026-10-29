@@ -18,20 +18,34 @@ public class TestMerchants {
     }
 
     public TestMerchant create() {
+        return create(null);
+    }
+
+    /** A merchant whose webhooks go to {@code callbackUrl}, signed with a fresh webhook secret. */
+    public TestMerchant createWithWebhook(String callbackUrl) {
+        return create(callbackUrl);
+    }
+
+    private TestMerchant create(String callbackUrl) {
         UUID merchantId = UUID.randomUUID();
         String apiKey = "pk_test_" + UUID.randomUUID().toString().replace("-", "");
         String secret = "sk_test_" + UUID.randomUUID();
+        String webhookSecret = callbackUrl == null ? null : "whsec_test_" + UUID.randomUUID();
 
-        jdbc.sql("INSERT INTO merchants (id, name) VALUES (:id, :name)")
+        jdbc.sql("""
+                        INSERT INTO merchants (id, name, callback_url, webhook_secret_ciphertext)
+                        VALUES (:id, :name, :url, :webhookSecret)""")
                 .param("id", merchantId)
                 .param("name", "Test Merchant " + merchantId.toString().substring(0, 8))
+                .param("url", callbackUrl)
+                .param("webhookSecret", webhookSecret == null ? null : cipher.encrypt(webhookSecret))
                 .update();
         jdbc.sql("INSERT INTO api_credentials (merchant_id, api_key, secret_ciphertext) VALUES (:m, :k, :s)")
                 .param("m", merchantId)
                 .param("k", apiKey)
                 .param("s", cipher.encrypt(secret))
                 .update();
-        return new TestMerchant(merchantId, apiKey, secret);
+        return new TestMerchant(merchantId, apiKey, secret, webhookSecret);
     }
 
     public void suspend(TestMerchant merchant) {
@@ -44,6 +58,6 @@ public class TestMerchants {
                 .update();
     }
 
-    public record TestMerchant(UUID id, String apiKey, String secret) {
+    public record TestMerchant(UUID id, String apiKey, String secret, String webhookSecret) {
     }
 }

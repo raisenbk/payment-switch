@@ -35,6 +35,9 @@ payment-switch:
   auth:
     timestamp-tolerance: 5m
     max-body-size: 64KB
+  admin:
+    # Shared operator token for /admin/** (X-Admin-Token). Unset = admin API disabled.
+    token: ${ADMIN_API_TOKEN:}
   crypto:
     # Base64-encoded 32-byte AES key for secrets at rest. Generate with: openssl rand -base64 32
     secret-key: ${SECRET_ENCRYPTION_KEY}

@@ -98,7 +98,11 @@ class TransactionRecoveryIntegrationTest extends AbstractTransactionIntegrationT
     }
 
     private void expireLease(UUID id) {
-        jdbc.sql("UPDATE outbox_events SET available_at = now() WHERE aggregate_id = :id").param("id", id).update();
+        jdbc.sql("""
+                        UPDATE outbox_events SET available_at = now()
+                         WHERE aggregate_id = :id AND event_type = 'transaction.accepted'""")
+                .param("id", id)
+                .update();
     }
 
     private String status(UUID id) {
@@ -106,7 +110,9 @@ class TransactionRecoveryIntegrationTest extends AbstractTransactionIntegrationT
     }
 
     private boolean outboxProcessed(UUID id) {
-        return jdbc.sql("SELECT processed_at IS NOT NULL FROM outbox_events WHERE aggregate_id = :id")
+        return jdbc.sql("""
+                        SELECT processed_at IS NOT NULL FROM outbox_events
+                         WHERE aggregate_id = :id AND event_type = 'transaction.accepted'""")
                 .param("id", id)
                 .query(Boolean.class)
                 .single();
