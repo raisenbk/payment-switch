@@ -74,14 +74,33 @@ RATE=30 STORM_SHARE=0.6 ./scripts/k6.sh timeout-storm
 
 | Rate | Timeout share | p95 (accept) | Error rate | Peak UNKNOWN | Time until UNKNOWN drained | Circuit opened? | Notes |
 |---|---|---|---|---|---|---|---|
-| _TODO_ | | | | | | | |
+| 30 | 0.6 | 28.1 ms (p99 83.9 ms) | 0.00% HTTP (0 of 3,600) | ~23 ⁴ | under 1 min after the run | yes, **MOCKA and MOCKB**, within the first 15 s | 88% of transactions ended `FAILED NO_ROUTE` (see observations) |
 
-Expected behaviour, to confirm or refute with the run:
+Run on 2026-10-29, `./scripts/k6.sh timeout-storm`, 03:26:53–03:28:53 UTC, started with an empty
+outbox. Outcome of the 3,600 transactions, counted in the database afterwards:
 
-- acceptance stays fast, because supplier slowness never blocks `POST /v1/transactions`;
-- UNKNOWN grows and then drains through inquiries without any refund on a guess;
-- the circuit breaker opens for MOCKA, and routing moves new work to MOCKB;
-- no failover happens from UNKNOWN (`paymentswitch_failovers_total` shows only definitive codes).
+| Outcome | Healthy destination | Timeout destination (`…22`) | Total |
+|---|---|---|---|
+| `SUCCESS` | 141 | 130 (via `UNKNOWN` → inquiry) | 271 (7.5%) |
+| `FAILED` `NO_ROUTE` (every eligible circuit open) | 1,249 | 1,929 | 3,178 (88.3%) |
+| `FAILED` `CIRCUIT_OPEN` (routing saw the supplier available; the breaker refused the submit) | 59 | 92 | 151 (4.2%) |
+| Failovers from `UNKNOWN` | | | 0 |
+| `MANUAL_REVIEW` | | | 0 |
+
+⁴ Sampled by the 10 s gauge refresh and the 15 s scrape, so short peaks can be missed. Only
+~106 submits actually timed out (82.8 at MOCKA, 23.5 at MOCKB, from the supplier call counters);
+most transactions never reached a supplier.
+
+Expected behaviour before the run, and what happened:
+
+- acceptance stays fast, because supplier slowness never blocks `POST /v1/transactions`.
+  **Confirmed** (p95 28 ms).
+- UNKNOWN grows and then drains through inquiries without any refund on a guess. **Confirmed, on
+  a small scale**: every timed-out submit became `UNKNOWN` and was resolved to `SUCCESS` by inquiry.
+  Few submits timed out, because the circuits stopped most of them.
+- the circuit breaker opens for MOCKA, and routing moves new work to MOCKB. **Refuted.** Both
+  circuits opened, so there was nothing to route to (see observations).
+- no failover happens from UNKNOWN. **Confirmed** (0 `PROCESSING → PROCESSING` events).
 
 ## Observations
 
@@ -105,3 +124,26 @@ Expected behaviour, to confirm or refute with the run:
   1. larger pool;
   2. limit poller concurrency to the pool size, so it does not starve the API;
   3. spread load over several merchants to separate pool limits from lock limits.
+
+### Timeout storm (2026-10-29): safe, but it rejected healthy traffic too
+
+- **Safety held.** No double top-up and no failover from an ambiguous result. While circuits were
+  open, nothing was sent to a supplier: those transactions failed definitively and their holds
+  were released. The ones that had timed out stayed `UNKNOWN` until an inquiry confirmed them.
+- **Availability did not.** The mock supplier's timeout rule (`…22`) applies to *every* supplier.
+  So the storm hit MOCKA and MOCKB alike, and both circuits opened within 15 s. They then kept
+  re-opening: after each 30 s wait, the 3 trial calls ran into the same 60% timeouts. With every
+  eligible circuit open, routing fails fast with `NO_ROUTE`, including the 40% of requests for
+  healthy numbers (1,249 rejected).
+- **Why this matters:** the circuit breaker is per supplier, but these failures depend on the
+  destination. In a real outage a supplier is usually down for everything, and then this
+  behaviour is right. Here, a breaker that cannot tell "this supplier is down" from "these numbers
+  time out" took out the healthy traffic as well.
+- **Options** (a design decision, not yet made):
+  1. When every eligible circuit is open, delay the transaction (leave it `PENDING` and retry
+     later through the outbox) instead of failing it at once. The merchant then gets a slower
+     success instead of a fast failure.
+  2. Scope the storm to one supplier in the mock (e.g. only MOCKA times out). That tests the
+     scenario the breaker is designed for: failover to a healthy supplier.
+  3. Tune the breaker (minimum calls, failure threshold, slow-call rate). This only moves the
+     point where it trips.
