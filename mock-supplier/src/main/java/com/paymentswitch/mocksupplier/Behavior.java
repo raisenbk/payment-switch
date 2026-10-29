@@ -6,6 +6,8 @@ public enum Behavior {
     SUCCESS,
     /** 200 FAILED immediately: a definitive business failure (e.g. invalid number). */
     FAIL,
+    /** 200 FAILED immediately with OUT_OF_STOCK: definitive, but another supplier may have stock. */
+    OUT_OF_STOCK,
     /** Processes successfully but answers only after the configured delay (caller times out). */
     TIMEOUT_THEN_SUCCESS,
     /** Fails but answers only after the configured delay (caller times out). */

@@ -14,12 +14,15 @@ management:
       exposure:
         include: health
 
-# Behaviour is chosen by the last digits of the destination number (first matching rule wins);
-# everything else succeeds immediately.
+# Behaviour is chosen by supplier code and/or the last digits of the destination number (first
+# matching rule wins); everything else succeeds immediately.
 mock-supplier:
   # How long "slow" behaviours wait: longer than the switch's read timeout, so it times out.
   delay: ${MOCK_SUPPLIER_DELAY:3s}
   rules:
+    # A supplier that is out of stock for everything: lets the switch demonstrate failover.
+    - supplier: MOCKOOS
+      behavior: OUT_OF_STOCK
     - destination-suffix: "11"
       behavior: FAIL
     - destination-suffix: "22"

@@ -3,7 +3,11 @@ package com.paymentswitch.mocksupplier;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import java.io.UnsupportedEncodingException;
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -111,17 +115,75 @@ class SupplierControllerTest {
     }
 
     @Test
+    void outOfStockSupplierFailsDefinitively() {
+        MvcTestResult result = submit("MOCKOOS", UUID.randomUUID().toString(), "081200000000", 10_000);
+
+        assertThat(result).bodyJson().extractingPath("$.status").isEqualTo("FAILED");
+        assertThat(result).bodyJson().extractingPath("$.errorCode").isEqualTo("OUT_OF_STOCK");
+    }
+
+    @Test
+    void settlementListsTodaysSuccessfulTopUpsForThatSupplier() {
+        String supplier = "SETTLE" + UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+        String ok = UUID.randomUUID().toString();
+        String failed = UUID.randomUUID().toString();
+        submit(supplier, ok, "081200000000", 10_000);
+        submit(supplier, failed, "081200000011", 10_000);
+        submit("OTHER", UUID.randomUUID().toString(), "081200000000", 10_000);
+
+        String csv = settlement(supplier, false);
+
+        List<String> lines = csv.lines().toList();
+        assertThat(lines.getFirst()).isEqualTo(SupplierController.SETTLEMENT_HEADER);
+        assertThat(lines).hasSize(2);
+        assertThat(lines.get(1)).startsWith(ok + ",MS-").contains(",SKU-10,081200000000,10000,IDR,");
+    }
+
+    @Test
+    void settlementWithDiscrepanciesContainsOneOfEachMistake() {
+        String supplier = "SETTLE" + UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+        List<String> references = List.of(UUID.randomUUID().toString(), UUID.randomUUID().toString(),
+                UUID.randomUUID().toString());
+        references.forEach(reference -> submit(supplier, reference, "081200000000", 10_000));
+
+        List<String> lines = settlement(supplier, true).lines().skip(1).toList();
+
+        assertThat(lines).hasSize(4);
+        assertThat(lines).noneMatch(line -> line.startsWith(references.get(0)));
+        assertThat(lines.get(0)).startsWith(references.get(1)).contains(",10100,");
+        assertThat(lines.get(2)).isEqualTo(lines.get(1)).startsWith(references.get(2));
+        assertThat(lines.get(3)).contains(",MS-GHOST001,");
+    }
+
+    @Test
     void unknownReferenceIsNotFound() {
         assertThat(inquiry("nope")).hasStatus(HttpStatus.NOT_FOUND);
     }
 
     private MvcTestResult submit(String reference, String destination) {
-        return mvc.post().uri("/suppliers/MOCKA/transactions")
+        return submit("MOCKA", reference, destination, 10_000);
+    }
+
+    private MvcTestResult submit(String supplier, String reference, String destination, long amount) {
+        return mvc.post().uri("/suppliers/" + supplier + "/transactions")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                        {"reference":"%s","sku":"SKU-10","destination":"%s","amount":10000}"""
-                        .formatted(reference, destination))
+                        {"reference":"%s","sku":"SKU-10","destination":"%s","amount":%d}"""
+                        .formatted(reference, destination, amount))
                 .exchange();
+    }
+
+    private String settlement(String supplier, boolean discrepancies) {
+        MvcTestResult result = mvc.get()
+                .uri("/suppliers/" + supplier + "/settlements/" + LocalDate.now(ZoneOffset.UTC)
+                        + "?discrepancies=" + discrepancies)
+                .exchange();
+        assertThat(result).hasStatusOk();
+        try {
+            return result.getResponse().getContentAsString();
+        } catch (UnsupportedEncodingException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private MvcTestResult inquiry(String reference) {

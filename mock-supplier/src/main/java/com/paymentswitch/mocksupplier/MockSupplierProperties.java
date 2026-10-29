@@ -7,22 +7,23 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
  * @param delay how long slow behaviours take
- * @param rules first rule whose suffix (and optional exact amount) matches decides the behaviour
+ * @param rules first rule whose supplier, suffix and exact amount (each optional) match decides the behaviour
  */
 @ConfigurationProperties("mock-supplier")
 public record MockSupplierProperties(@DefaultValue("3s") Duration delay, @DefaultValue List<Rule> rules) {
 
-    public record Rule(String destinationSuffix, Long amount, Behavior behavior) {
+    public record Rule(String supplier, String destinationSuffix, Long amount, Behavior behavior) {
 
-        boolean matches(String destination, long requestAmount) {
-            return (destinationSuffix == null || destination.endsWith(destinationSuffix))
+        boolean matches(String supplierCode, String destination, long requestAmount) {
+            return (supplier == null || supplier.equalsIgnoreCase(supplierCode))
+                    && (destinationSuffix == null || destination.endsWith(destinationSuffix))
                     && (amount == null || amount == requestAmount);
         }
     }
 
-    public Behavior behaviorFor(String destination, long amount) {
+    public Behavior behaviorFor(String supplierCode, String destination, long amount) {
         return rules.stream()
-                .filter(rule -> rule.matches(destination, amount))
+                .filter(rule -> rule.matches(supplierCode, destination, amount))
                 .map(Rule::behavior)
                 .findFirst()
                 .orElse(Behavior.SUCCESS);
