@@ -17,9 +17,15 @@ public class LedgerAssertions {
     }
 
     public void assertGlobalInvariants() {
-        long debits = sum("DEBIT");
-        long credits = sum("CREDIT");
-        assertThat(debits).as("total debits = total credits").isEqualTo(credits);
+        // One statement, so both totals come from the same snapshot even while background
+        // processing (outbox, inquiries) keeps posting journals.
+        long[] totals = jdbc.sql("""
+                        SELECT COALESCE(SUM(amount) FILTER (WHERE direction = 'DEBIT'), 0),
+                               COALESCE(SUM(amount) FILTER (WHERE direction = 'CREDIT'), 0)
+                          FROM ledger_entries""")
+                .query((rs, row) -> new long[] {rs.getLong(1), rs.getLong(2)})
+                .single();
+        assertThat(totals[0]).as("total debits = total credits").isEqualTo(totals[1]);
 
         List<String> unbalanced = jdbc.sql("""
                         SELECT journal_id::text
@@ -56,12 +62,5 @@ public class LedgerAssertions {
                 .query(String.class)
                 .list();
         assertThat(heldMismatch).as("hold account balance = sum of active holds").isEmpty();
-    }
-
-    private long sum(String direction) {
-        return jdbc.sql("SELECT COALESCE(SUM(amount), 0) FROM ledger_entries WHERE direction = :d")
-                .param("d", direction)
-                .query(Long.class)
-                .single();
     }
 }
