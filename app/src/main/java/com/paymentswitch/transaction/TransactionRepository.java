@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -85,6 +86,36 @@ class TransactionRepository {
                 .param("id", id)
                 .param("from", from.name())
                 .update() == 1;
+    }
+
+    /**
+     * Moves a PROCESSING transaction from supplier {@code fromSupplierId} to another route, remembering
+     * the old supplier as tried. Compare-and-set on status and supplier, like status changes.
+     */
+    boolean reroute(UUID id, long fromSupplierId, long toSupplierId, String supplierSku, long supplierCost) {
+        return jdbc.sql("""
+                        UPDATE transactions
+                           SET attempted_supplier_ids = array_append(attempted_supplier_ids, supplier_id),
+                               supplier_id = :to,
+                               supplier_sku = :sku,
+                               supplier_cost = :cost,
+                               updated_at = now(),
+                               version = version + 1
+                         WHERE id = :id AND status = 'PROCESSING' AND supplier_id = :from""")
+                .param("to", toSupplierId)
+                .param("sku", supplierSku)
+                .param("cost", supplierCost)
+                .param("id", id)
+                .param("from", fromSupplierId)
+                .update() == 1;
+    }
+
+    /** Suppliers that already gave this transaction a definitive failure (not including the current one). */
+    Set<Long> attemptedSuppliers(UUID id) {
+        return Set.copyOf(jdbc.sql("SELECT unnest(attempted_supplier_ids) FROM transactions WHERE id = :id")
+                .param("id", id)
+                .query(Long.class)
+                .list());
     }
 
     /** Starts the inquiry schedule for a transaction that just became UNKNOWN (or FAILED, to verify). */

@@ -1,5 +1,6 @@
 package com.paymentswitch.support;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 import org.springframework.boot.test.context.TestComponent;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -29,6 +30,25 @@ public class TestCatalog {
         return product;
     }
 
+    /** A product mapped to several suppliers (created on first use), e.g. for failover tests. */
+    public TestProduct productSuppliedBy(long price, Mapping... mappings) {
+        TestProduct product = productWithoutSupplier(price);
+        for (Mapping mapping : mappings) {
+            jdbc.sql("""
+                            INSERT INTO supplier_products
+                                (supplier_id, product_id, supplier_sku, cost_price, currency, priority, success_rate)
+                            VALUES (:supplierId, :productId, :sku, :cost, 'IDR', :priority, :successRate)""")
+                    .param("supplierId", supplierId(mapping.supplierCode()))
+                    .param("productId", product.id())
+                    .param("sku", mapping.supplierCode() + "-" + product.code())
+                    .param("cost", mapping.cost())
+                    .param("priority", mapping.priority())
+                    .param("successRate", mapping.successRate())
+                    .update();
+        }
+        return product;
+    }
+
     public TestProduct productWithoutSupplier(long price) {
         String code = "P-" + UUID.randomUUID().toString().substring(0, 8);
         long id = jdbc.sql("""
@@ -50,5 +70,12 @@ public class TestCatalog {
     }
 
     public record TestProduct(long id, String code, long price) {
+    }
+
+    public record Mapping(String supplierCode, long cost, int priority, BigDecimal successRate) {
+
+        public static Mapping of(String supplierCode, long cost, int priority) {
+            return new Mapping(supplierCode, cost, priority, BigDecimal.ONE);
+        }
     }
 }

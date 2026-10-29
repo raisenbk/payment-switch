@@ -15,6 +15,11 @@ payment-switch:
     poll-interval: 100ms
     lease: 10s
     retry-initial-delay: 200ms
+  circuit-breaker:
+    # Many tests provoke supplier timeouts on purpose: never open circuits by accident. Tests that
+    # need an open circuit force it (and the opening logic has its own unit test).
+    minimum-number-of-calls: 100000
+    sliding-window-size: 100000
   inquiry:
     poll-interval: 100ms
     initial-delay: 300ms

@@ -61,6 +61,11 @@ public abstract class AbstractIntegrationTest {
     @DynamicPropertySource
     static void supplierEndpoints(DynamicPropertyRegistry registry) {
         registry.add("payment-switch.suppliers.mocka.base-url", () -> mockSupplierUrl("MOCKA"));
+        registry.add("payment-switch.suppliers.mockb.base-url", () -> mockSupplierUrl("MOCKB"));
+        // Always answers OUT_OF_STOCK (a definitive failure): see mock-supplier's rules.
+        registry.add("payment-switch.suppliers.mockoos.base-url", () -> mockSupplierUrl("MOCKOOS"));
+        // Nothing listens on port 1: connection refused, i.e. unreachable.
+        registry.add("payment-switch.suppliers.deadsup.base-url", () -> "http://localhost:1/suppliers/DEADSUP");
     }
 
     @LocalServerPort

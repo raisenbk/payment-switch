@@ -15,6 +15,14 @@ payment-switch:
       base-url: ${MOCK_SUPPLIER_URL:http://localhost:8090}/suppliers/MOCKA
       connect-timeout: 1s
       read-timeout: 5s
+    mockb:
+      base-url: ${MOCK_SUPPLIER_URL:http://localhost:8090}/suppliers/MOCKB
+      connect-timeout: 1s
+      read-timeout: 5s
+    mockoos:
+      base-url: ${MOCK_SUPPLIER_URL:http://localhost:8090}/suppliers/MOCKOOS
+      connect-timeout: 1s
+      read-timeout: 5s
   # Short schedule so the whole UNKNOWN lifecycle can be watched in a local demo
   # (production defaults: 30s first inquiry, 24h window, see InquiryProperties).
   inquiry:

@@ -57,6 +57,22 @@ class TransactionStateMachine {
         }
     }
 
+    /**
+     * Failover: the transaction stays PROCESSING but moves from one supplier to the next. Recorded as
+     * a PROCESSING → PROCESSING event so the history shows every supplier that was tried.
+     *
+     * @throws ConcurrentTransitionException if it is no longer PROCESSING at {@code fromSupplierId}
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    void failOver(UUID transactionId, long fromSupplierId, long toSupplierId, String supplierSku, long supplierCost,
+            Map<String, Object> payload) {
+        if (!repository.reroute(transactionId, fromSupplierId, toSupplierId, supplierSku, supplierCost)) {
+            throw new ConcurrentTransitionException(transactionId, TransactionStatus.PROCESSING);
+        }
+        repository.insertEvent(transactionId, TransactionStatus.PROCESSING, TransactionStatus.PROCESSING,
+                jsonMapper.writeValueAsString(payload));
+    }
+
     static class IllegalTransitionException extends IllegalStateException {
 
         IllegalTransitionException(UUID id, TransactionStatus from, TransactionStatus to) {

@@ -35,6 +35,9 @@ class HttpSupplierGateway implements SupplierGateway {
 
     private static final Logger log = LoggerFactory.getLogger(HttpSupplierGateway.class);
 
+    /** Failure code when no connection could be made: nothing was sent. */
+    static final String UNREACHABLE = "SUPPLIER_UNREACHABLE";
+
     private final String supplierCode;
     private final RestClient client;
 
@@ -63,7 +66,7 @@ class HttpSupplierGateway implements SupplierGateway {
                     .exchange((req, response) -> mapSubmit(response.getStatusCode(), readBody(response)));
         } catch (ResourceAccessException e) {
             result = connectionNeverEstablished(e)
-                    ? new Failed("SUPPLIER_UNREACHABLE")
+                    ? new Failed(UNREACHABLE)
                     : new Unknown(hasCause(e, HttpTimeoutException.class) ? "READ_TIMEOUT" : "IO_ERROR");
         } catch (RuntimeException e) {
             log.warn("Unexpected error submitting to supplier {}", supplierCode, e);

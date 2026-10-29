@@ -9,7 +9,9 @@
 --   webhook secret: whsec_demo_local_only_not_secret
 
 INSERT INTO suppliers (code, name) VALUES
-    ('MOCKA', 'Mock Supplier A')
+    ('MOCKA', 'Mock Supplier A'),
+    ('MOCKB', 'Mock Supplier B'),
+    ('MOCKOOS', 'Mock Supplier (always out of stock)')
 ON CONFLICT (code) DO NOTHING;
 
 INSERT INTO products (code, name, category, base_price, currency) VALUES
@@ -22,6 +24,20 @@ INSERT INTO supplier_products (supplier_id, product_id, supplier_sku, cost_price
 SELECT s.id, p.id, 'A-' || p.code, p.base_price - 500, 'IDR', 1
   FROM suppliers s CROSS JOIN products p
  WHERE s.code = 'MOCKA' AND p.code IN ('PULSA10', 'PULSA25', 'DATA5GB')
+ON CONFLICT (supplier_id, product_id) DO NOTHING;
+
+-- MOCKB is the second choice for prepaid credit (routing falls back to it if MOCKA's circuit opens).
+INSERT INTO supplier_products (supplier_id, product_id, supplier_sku, cost_price, currency, priority)
+SELECT s.id, p.id, 'B-' || p.code, p.base_price - 400, 'IDR', 2
+  FROM suppliers s CROSS JOIN products p
+ WHERE s.code = 'MOCKB' AND p.code IN ('PULSA10', 'PULSA25')
+ON CONFLICT (supplier_id, product_id) DO NOTHING;
+
+-- Failover demo: DATA5GB is tried at MOCKOOS first (cheapest, always out of stock), then MOCKA.
+INSERT INTO supplier_products (supplier_id, product_id, supplier_sku, cost_price, currency, priority)
+SELECT s.id, p.id, 'OOS-' || p.code, p.base_price - 700, 'IDR', 0
+  FROM suppliers s CROSS JOIN products p
+ WHERE s.code = 'MOCKOOS' AND p.code = 'DATA5GB'
 ON CONFLICT (supplier_id, product_id) DO NOTHING;
 
 INSERT INTO merchants (id, name, callback_url, webhook_secret_ciphertext) VALUES

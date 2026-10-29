@@ -15,6 +15,13 @@ spring:
   threads:
     virtual:
       enabled: true
+  batch:
+    job:
+      # Jobs are started explicitly (settlement import), never at startup.
+      enabled: false
+    jdbc:
+      # The job repository tables are created by Flyway (V8).
+      initialize-schema: never
 
 server:
   error:
