@@ -279,15 +279,15 @@ Legend: `[ ]` todo · `[x]` done. Each phase ends with a DoD that must be fully 
 
 ### Phase 7 — Routing & Reconciliation (Week 7)
 
-- [ ] Routing engine: select by priority/cost/success rate; skip inactive suppliers
-- [ ] Failover: on definitive failure of supplier A, retry via supplier B only when safe (no ambiguity); never fail over from `UNKNOWN`
-- [ ] Simple circuit breaker (Resilience4j) per supplier
-- [ ] Settlement file format defined (CSV) and sample generator in mock-supplier
-- [ ] Spring Batch job: import settlement file → match against internal transactions → write `recon_results`
-- [ ] Detect `MISSING_INTERNAL`, `MISSING_SUPPLIER`, `AMOUNT_DIFF`; idempotent re-import via file checksum
-- [ ] Report endpoint (JSON) + CSV export of discrepancies
-- [ ] Tests: routing decision table; recon with seeded discrepancies
-- [ ] ADR-008: failover rules and why UNKNOWN never fails over
+- [x] Routing engine: select by priority/cost/success rate; skip inactive suppliers
+- [x] Failover: on definitive failure of supplier A, retry via supplier B only when safe (no ambiguity); never fail over from `UNKNOWN`
+- [x] Simple circuit breaker (Resilience4j) per supplier
+- [x] Settlement file format defined (CSV) and sample generator in mock-supplier
+- [x] Spring Batch job: import settlement file → match against internal transactions → write `recon_results`
+- [x] Detect `MISSING_INTERNAL`, `MISSING_SUPPLIER`, `AMOUNT_DIFF`; idempotent re-import via file checksum
+- [x] Report endpoint (JSON) + CSV export of discrepancies
+- [x] Tests: routing decision table; recon with seeded discrepancies
+- [x] ADR-008: failover rules and why UNKNOWN never fails over
 
 **DoD:** recon job correctly classifies all seeded discrepancy types; routing tests cover failover and circuit-open cases.
 
@@ -378,3 +378,4 @@ Rules: no `Thread.sleep` for synchronization (use Awaitility); tests must be det
 | 2026-10-28 | 4 | POST returns 202 PENDING; supplier processing starts after commit via an async AFTER_COMMIT listener (in-memory, replaced by the outbox in Phase 5; until then a crash after commit leaves the transaction PENDING). Supplier cost frozen on the transaction at routing time. Connection refused on submit = FAILED (nothing sent); read timeout/5xx/pending = UNKNOWN; inquiry 404 = FAILED (supplier contract). mock-supplier is chosen by destination suffix; e2e tests run its real jar via Testcontainers. Local profile seeds a demo merchant + products. See ADR-005. |
 | 2026-10-29 | 5 | Outbox claim = one `UPDATE … FROM (SELECT … FOR UPDATE SKIP LOCKED)` statement that also leases the rows (available_at pushed forward), handlers run on virtual threads, retry with capped exponential backoff; at-least-once, so handlers are idempotent. Crash in PROCESSING → resubmit with the same reference (supplier dedupes, 409 + stored outcome); `supplier_sku` now frozen on the transaction for that. Inquiry schedule stored on `transactions` (next_inquiry_at/attempts/deadline), same claiming technique; MANUAL_REVIEW keeps the hold. Late answers (CAS lost against a contradicting final status, or the post-failure verification inquiry finding SUCCESS) go to `transaction_discrepancies`, never auto-applied. Added mock behaviours 77 (stuck pending) and 88 (slow success, 404 while processing). Processing now starts within one poll (250ms) instead of immediately. See ADR-006 and the ADR-005 addendum. |
 | 2026-10-29 | 6 | Final status (SUCCESS/FAILED) publishes `transaction.completed` to the outbox inside the state machine; its handler creates one `webhook_events` row (unique per outbox event) holding the merchant-facing event id and the frozen JSON body. Merchants without `callback_url` get none. Signature = hex(HMAC(webhook_secret, timestamp + "." + body)). Only 2xx counts; backoff 30s doubling to 6h with jitter in the upper half; DEAD after 10 attempts; attempts append-only in `webhook_deliveries`. Admin API (`/admin/webhooks`, re-drive) behind a shared `X-Admin-Token` (constant-time, disabled when unset) — a stand-in for real operator auth. mock-supplier gained a demo webhook receiver; the demo merchant's webhooks go there. See ADR-007. |
+| 2026-10-29 | 7 | Routing is a pure ranking function (healthy success rate ≥ 0.80 first, then priority, success rate, cost, id; filters: active, currency, cost ≤ price, not tried, circuit not open), tested as a decision table. Failover inside PROCESSING via CAS on (status, supplier_id) + PROCESSING→PROCESSING event; only after definitive failures, never from UNKNOWN, not for INVALID_DESTINATION, max 3 suppliers; tried suppliers in `transactions.attempted_supplier_ids`. Supplier request amount is now the agreed supplier cost (what the supplier bills, as in its settlement file). Resilience4j core (no Boot starter) per supplier, submits only; unhealthy = Unknown or unreachable. Recon: settlement files uploaded via `/admin/recon/settlements` (CSV body), stored with content and SHA-256 (unique → idempotent re-import); Spring Batch 6 job (JDBC repository, schema via Flyway V8): import lines → classify (pure decision table) → MISSING_SUPPLIER by business day (UTC by default). Added DUPLICATE status (same reference billed twice) beyond the planned four. Invalid files are discarded entirely. See ADR-008. |

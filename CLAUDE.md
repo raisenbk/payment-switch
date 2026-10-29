@@ -64,6 +64,13 @@ Actions, Micrometer + Prometheus + Grafana, OpenTelemetry, k6. Kafka/Kubernetes 
   into a `webhook_events` row and `WebhookDispatcher` delivers it (ADR-007). Merchant callback URL and
   secret come from `merchant.MerchantWebhooks`. `/admin/**` needs `X-Admin-Token`; tests stub merchant
   endpoints with WireMock and create webhook merchants via `TestMerchants.createWithWebhook(url)`.
+- Routing: `RoutingPolicy` (pure, decision-table tested) behind `SupplierRouter`; failover only via
+  `TransactionStateMachine.failOver` after a definitive failure (ADR-008). Supplier submits go through
+  a per-supplier circuit breaker (`SupplierCircuitBreakers`). Test suppliers: MOCKA/MOCKB normal,
+  MOCKOOS always out of stock, DEADSUP unreachable; build products with `TestCatalog.productSuppliedBy`.
+- Reconciliation: Spring Batch 6 (packages `org.springframework.batch.core.*` and
+  `org.springframework.batch.infrastructure.*`), job repository tables via Flyway, jobs never run at
+  startup. Settlement files are imported through `/admin/recon/settlements`.
 - Build from the repository root: the app's integration tests run `mock-supplier/target/mock-supplier.jar`
   in a container, so `-pl app` alone needs that jar built first (`-am` or a full `verify`).
 - Local demo: `docker compose up --build -d`, then `./scripts/signed-curl.sh` (demo merchant seeded

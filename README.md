@@ -8,7 +8,7 @@ resolves ambiguous (timed-out) results safely and notifies the merchant by webho
 
 > Portfolio project. No real money, suppliers, credentials or customer data.
 
-**Status:** Phase 6 (webhooks) — see [PLAN.md](PLAN.md) for the roadmap.
+**Status:** Phase 7 (routing, failover, reconciliation) — see [PLAN.md](PLAN.md) for the roadmap.
 
 ## Quick start
 
@@ -36,6 +36,9 @@ The mock supplier's behavior is chosen by the **last two digits of the destinati
 | `66` | rejects the request (HTTP 400) | `FAILED` |
 | `77` | answers `PENDING` forever | `UNKNOWN` → `MANUAL_REVIEW` after the max window (hold kept) |
 | `88` | processes slowly, invisible to inquiries at first | `FAILED`, then flagged as a `LATE_SUCCESS` discrepancy |
+
+Supplier `MOCKOOS` is always out of stock. The demo product `DATA5GB` is routed there first, so
+buying it shows a **failover** to `MOCKA` in the transaction history.
 
 The `local` profile uses a short inquiry schedule so you can watch this happen: first inquiry after
 5s, `MANUAL_REVIEW` after 2 minutes, late-success verification after 1 minute (production defaults:
@@ -99,6 +102,44 @@ Mutating requests also need an `Idempotency-Key` header. Re-sending the same req
 key returns the original response (with `Idempotent-Replayed: true`) without executing it again;
 reusing a key for a different request returns `409`.
 
+## Routing, failover and circuit breaking
+
+Each product can be mapped to several suppliers. Routing takes the eligible ones, which are active,
+in the right currency, not more expensive than the price, not already tried and not behind an open
+circuit. It then ranks them by health, priority, success rate and cost. If a supplier answers with
+a **definitive** failure (out of stock, unreachable, rejected), the transaction fails over to the
+next supplier. An **ambiguous** answer (timeout) never fails over: that could top the customer up
+twice ([ADR-008](docs/adr/0008-failover-rules.md)). A circuit breaker per supplier removes a failing
+supplier from routing for 30 seconds.
+
+## Reconciliation
+
+Suppliers send a daily settlement CSV of what they bill us:
+
+```csv
+reference,supplier_ref,sku,destination,amount,currency,completed_at
+5f0c3c1e-…,MS-1A2B3C4D,A-PULSA10,081234567890,10000,IDR,2026-10-29T02:06:13Z
+```
+
+Importing it runs a Spring Batch job that matches every line against our transactions and our
+day's successes against the file. It classifies each one as `MATCHED`, `AMOUNT_DIFF`,
+`MISSING_INTERNAL` (billed, but not a success on our side), `MISSING_SUPPLIER` (our success, not
+billed) or `DUPLICATE`. Re-importing the same file is a no-op (SHA-256 checksum).
+
+```bash
+curl -s http://localhost:8090/suppliers/MOCKA/settlements/$(date -u +%F)?discrepancies=true > mocka.csv
+```
+```bash
+curl -s -X POST -H "X-Admin-Token: local-admin-token-not-secret" -H "Content-Type: text/csv" --data-binary @mocka.csv "http://localhost:8080/admin/recon/settlements?supplier=MOCKA&businessDate=$(date -u +%F)"
+```
+```bash
+curl -s -H "X-Admin-Token: local-admin-token-not-secret" http://localhost:8080/admin/recon/settlements/1/discrepancies.csv
+```
+
+The mock supplier generates the file from what it really processed. `discrepancies=true` seeds one
+of each mistake: a line dropped, an amount raised by 100, a line duplicated and an unknown
+reference added.
+
 ## Webhooks
 
 When a transaction reaches `SUCCESS` or `FAILED`, the merchant's callback URL receives:
@@ -147,3 +188,4 @@ Every error response has the same shape, and the trace id is also returned in `X
 - [ADR-005: A supplier timeout is UNKNOWN, not FAILED](docs/adr/0005-timeout-means-unknown.md)
 - [ADR-006: Transactional outbox](docs/adr/0006-transactional-outbox.md)
 - [ADR-007: At-least-once, signed webhook delivery](docs/adr/0007-at-least-once-webhooks.md)
+- [ADR-008: Failover only after a definitive failure, never from UNKNOWN](docs/adr/0008-failover-rules.md)
