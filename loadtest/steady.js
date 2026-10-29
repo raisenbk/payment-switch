@@ -5,6 +5,7 @@ import { buy, destination, fundDemoMerchant } from './lib/switch.js';
 const RATE = Number(__ENV.RATE || 50);
 
 export const options = {
+  summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
   scenarios: {
     steady: {
       executor: 'constant-arrival-rate',

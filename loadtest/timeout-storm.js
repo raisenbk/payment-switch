@@ -11,6 +11,7 @@ const RATE = Number(__ENV.RATE || 30);
 const STORM_SHARE = Number(__ENV.STORM_SHARE || 0.6);
 
 export const options = {
+  summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
   scenarios: {
     storm: {
       executor: 'constant-arrival-rate',
