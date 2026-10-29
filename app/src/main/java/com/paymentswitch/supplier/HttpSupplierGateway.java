@@ -3,6 +3,7 @@ package com.paymentswitch.supplier;
 import com.paymentswitch.supplier.SupplierResult.Failed;
 import com.paymentswitch.supplier.SupplierResult.Success;
 import com.paymentswitch.supplier.SupplierResult.Unknown;
+import io.micrometer.observation.ObservationRegistry;
 import java.net.ConnectException;
 import java.net.http.HttpClient;
 import java.net.http.HttpConnectTimeoutException;
@@ -42,6 +43,11 @@ class HttpSupplierGateway implements SupplierGateway {
     private final RestClient client;
 
     HttpSupplierGateway(String supplierCode, SupplierProperties.Endpoint endpoint) {
+        this(supplierCode, endpoint, ObservationRegistry.NOOP);
+    }
+
+    /** With an observation registry, calls are traced and carry the W3C trace context to the supplier. */
+    HttpSupplierGateway(String supplierCode, SupplierProperties.Endpoint endpoint, ObservationRegistry observations) {
         this.supplierCode = supplierCode;
         HttpClient httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
@@ -52,6 +58,7 @@ class HttpSupplierGateway implements SupplierGateway {
         this.client = RestClient.builder()
                 .baseUrl(endpoint.baseUrl().toString())
                 .requestFactory(requestFactory)
+                .observationRegistry(observations)
                 .build();
     }
 

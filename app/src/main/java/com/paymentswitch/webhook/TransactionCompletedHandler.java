@@ -2,6 +2,7 @@ package com.paymentswitch.webhook;
 
 import com.paymentswitch.common.outbox.OutboxEvent;
 import com.paymentswitch.common.outbox.OutboxHandler;
+import com.paymentswitch.common.tracing.TraceContexts;
 import com.paymentswitch.merchant.MerchantWebhooks;
 import java.time.Clock;
 import java.util.LinkedHashMap;
@@ -23,13 +24,15 @@ class TransactionCompletedHandler implements OutboxHandler {
     private final MerchantWebhooks merchants;
     private final JsonMapper jsonMapper;
     private final Clock clock;
+    private final TraceContexts traces;
 
     TransactionCompletedHandler(WebhookRepository repository, MerchantWebhooks merchants, JsonMapper jsonMapper,
-            Clock clock) {
+            Clock clock, TraceContexts traces) {
         this.repository = repository;
         this.merchants = merchants;
         this.jsonMapper = jsonMapper;
         this.clock = clock;
+        this.traces = traces;
     }
 
     @Override
@@ -57,6 +60,7 @@ class TransactionCompletedHandler implements OutboxHandler {
         body.put("type", type);
         body.put("createdAt", clock.instant().toString());
         body.put("data", transaction);
-        repository.insertEvent(webhookId, event.id(), merchantId, type, jsonMapper.writeValueAsString(body));
+        repository.insertEvent(webhookId, event.id(), merchantId, type, jsonMapper.writeValueAsString(body),
+                traces.capture());
     }
 }

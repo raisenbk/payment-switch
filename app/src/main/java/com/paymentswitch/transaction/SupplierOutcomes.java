@@ -15,6 +15,7 @@ import com.paymentswitch.supplier.SupplierResult.Unknown;
 import com.paymentswitch.transaction.TransactionRepository.StatusChange;
 import com.paymentswitch.transaction.TransactionRepository.TransactionRow;
 import com.paymentswitch.transaction.TransactionStateMachine.ConcurrentTransitionException;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -48,14 +49,16 @@ class SupplierOutcomes {
     private final LedgerService ledger;
     private final InquiryProperties inquiry;
     private final TransactionTemplate transaction;
+    private final MeterRegistry meters;
 
     SupplierOutcomes(TransactionRepository repository, TransactionStateMachine stateMachine, LedgerService ledger,
-            InquiryProperties inquiry, PlatformTransactionManager transactionManager) {
+            InquiryProperties inquiry, PlatformTransactionManager transactionManager, MeterRegistry meters) {
         this.repository = repository;
         this.stateMachine = stateMachine;
         this.ledger = ledger;
         this.inquiry = inquiry;
         this.transaction = new TransactionTemplate(transactionManager);
+        this.meters = meters;
     }
 
     /** The answer to a submit, for a transaction that is PROCESSING. */
@@ -155,6 +158,7 @@ class SupplierOutcomes {
 
     private void flag(UUID id, String kind, TransactionStatus ourStatus, String supplierRef, String supplierCode) {
         if (repository.insertDiscrepancy(id, kind, ourStatus, supplierRef, supplierCode)) {
+            meters.counter("paymentswitch.discrepancies", "kind", kind, "supplier", supplierCode).increment();
             log.warn("DISCREPANCY {}: supplier {} contradicts our final status {} for transaction {} (supplierRef {})",
                     kind, supplierCode, ourStatus, id, supplierRef);
         }

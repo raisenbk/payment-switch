@@ -6,6 +6,7 @@ import com.paymentswitch.supplier.SupplierResult.Failed;
 import com.paymentswitch.supplier.SupplierResult.Success;
 import com.paymentswitch.supplier.SupplierResult.Unknown;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -16,7 +17,8 @@ class CircuitBreakingSupplierGatewayTest {
 
     /** Opens after 4 calls with at least 50% unhealthy; trial calls after 10 minutes (never, in a test). */
     private final SupplierCircuitBreakers breakers =
-            new SupplierCircuitBreakers(new CircuitBreakerProperties(50, 4, 4, Duration.ofMinutes(10), 1));
+            new SupplierCircuitBreakers(new CircuitBreakerProperties(50, 4, 4, Duration.ofMinutes(10), 1),
+                    new SimpleMeterRegistry());
 
     @Test
     void unreachableAndAmbiguousResultsOpenTheCircuit() {

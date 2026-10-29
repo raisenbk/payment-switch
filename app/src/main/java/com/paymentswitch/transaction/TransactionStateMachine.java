@@ -2,11 +2,14 @@ package com.paymentswitch.transaction;
 
 import com.paymentswitch.common.outbox.OutboxPublisher;
 import com.paymentswitch.transaction.TransactionRepository.StatusChange;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -24,16 +27,20 @@ class TransactionStateMachine {
     private final TransactionRepository repository;
     private final OutboxPublisher outbox;
     private final JsonMapper jsonMapper;
+    private final MeterRegistry meters;
 
-    TransactionStateMachine(TransactionRepository repository, OutboxPublisher outbox, JsonMapper jsonMapper) {
+    TransactionStateMachine(TransactionRepository repository, OutboxPublisher outbox, JsonMapper jsonMapper,
+            MeterRegistry meters) {
         this.repository = repository;
         this.outbox = outbox;
         this.jsonMapper = jsonMapper;
+        this.meters = meters;
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
     void recordCreated(UUID transactionId, Map<String, Object> payload) {
         repository.insertEvent(transactionId, null, TransactionStatus.PENDING, jsonMapper.writeValueAsString(payload));
+        countAfterCommit("paymentswitch.transactions", "status", TransactionStatus.PENDING.name());
     }
 
     /**
@@ -50,6 +57,7 @@ class TransactionStateMachine {
             throw new ConcurrentTransitionException(transactionId, from);
         }
         repository.insertEvent(transactionId, from, to, jsonMapper.writeValueAsString(payload));
+        countAfterCommit("paymentswitch.transactions", "status", to.name());
         if (to.isFinal()) {
             TransactionRepository.TransactionRow row = repository.findById(transactionId).orElseThrow();
             outbox.publish(COMPLETED_EVENT, transactionId,
@@ -71,6 +79,17 @@ class TransactionStateMachine {
         }
         repository.insertEvent(transactionId, TransactionStatus.PROCESSING, TransactionStatus.PROCESSING,
                 jsonMapper.writeValueAsString(payload));
+        countAfterCommit("paymentswitch.failovers", "code", String.valueOf(payload.get("code")));
+    }
+
+    /** Counts only what was committed: a rolled-back transition never happened. */
+    private void countAfterCommit(String name, String tagKey, String tagValue) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                meters.counter(name, tagKey, tagValue).increment();
+            }
+        });
     }
 
     static class IllegalTransitionException extends IllegalStateException {

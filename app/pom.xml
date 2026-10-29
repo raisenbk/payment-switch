@@ -35,6 +35,16 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
         <dependency>
+            <!-- Tracing (Micrometer Tracing + OpenTelemetry bridge, OTLP export). -->
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-opentelemetry</artifactId>
+        </dependency>
+        <dependency>
+            <!-- Metrics are scraped by Prometheus from /actuator/prometheus. -->
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
@@ -55,6 +65,12 @@
             <!-- Per-supplier circuit breaker (core library, configured in code). -->
             <groupId>io.github.resilience4j</groupId>
             <artifactId>resilience4j-circuitbreaker</artifactId>
+            <version>2.4.0</version>
+        </dependency>
+        <dependency>
+            <!-- Circuit breaker state and call metrics in Micrometer. -->
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-micrometer</artifactId>
             <version>2.4.0</version>
         </dependency>
         <dependency>

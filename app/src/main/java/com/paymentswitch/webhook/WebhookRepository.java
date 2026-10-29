@@ -22,11 +22,14 @@ class WebhookRepository {
     }
 
     /** Idempotent per outbox event: a re-handled outbox event does not create a second webhook. */
-    void insertEvent(UUID id, long outboxEventId, UUID merchantId, String eventType, String payloadJson) {
+    void insertEvent(UUID id, long outboxEventId, UUID merchantId, String eventType, String payloadJson,
+            String traceHeadersJson) {
         jdbc.sql("""
-                        INSERT INTO webhook_events (id, outbox_event_id, merchant_id, event_type, payload)
-                        VALUES (:id, :outboxEventId, :merchantId, :eventType, CAST(:payload AS json))
+                        INSERT INTO webhook_events (id, outbox_event_id, merchant_id, event_type, payload, trace_headers)
+                        VALUES (:id, :outboxEventId, :merchantId, :eventType, CAST(:payload AS json),
+                                CAST(:traceHeaders AS json))
                         ON CONFLICT (outbox_event_id) DO NOTHING""")
+                .param("traceHeaders", traceHeadersJson)
                 .param("id", id)
                 .param("outboxEventId", outboxEventId)
                 .param("merchantId", merchantId)
@@ -52,7 +55,8 @@ class WebhookRepository {
                                next_attempt_at = now() + interval '1 millisecond' * CAST(:leaseMs AS double precision)
                           FROM due
                          WHERE w.id = due.id
-                        RETURNING w.id, w.merchant_id, w.payload::text AS payload, w.attempts""")
+                        RETURNING w.id, w.merchant_id, w.payload::text AS payload, w.attempts,
+                                  w.trace_headers::text AS trace_headers""")
                 .param("limit", limit)
                 .param("leaseMs", lease.toMillis())
                 .query(DueWebhook.class)
@@ -125,7 +129,11 @@ class WebhookRepository {
                 .list();
     }
 
-    record DueWebhook(UUID id, UUID merchantId, String payload, int attempts) {
+    long countDead() {
+        return jdbc.sql("SELECT count(*) FROM webhook_events WHERE status = 'DEAD'").query(Long.class).single();
+    }
+
+    record DueWebhook(UUID id, UUID merchantId, String payload, int attempts, String traceHeaders) {
     }
 
     record WebhookEventRow(UUID id, UUID merchantId, String eventType, String status, int attempts,

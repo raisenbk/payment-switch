@@ -1,13 +1,12 @@
 package com.paymentswitch.common.error;
 
 import com.paymentswitch.common.error.ErrorResponse.FieldProblem;
-import com.paymentswitch.common.web.TraceIdFilter;
+import com.paymentswitch.common.web.RequestIdFilter;
 import jakarta.servlet.ServletException;
 import jakarta.validation.ConstraintViolationException;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
@@ -69,7 +68,7 @@ public class GlobalExceptionHandler {
 
     private static ResponseEntity<ErrorResponse> build(
             HttpStatusCode status, String code, String message, List<FieldProblem> details) {
-        String traceId = MDC.get(TraceIdFilter.MDC_KEY);
+        String traceId = RequestIdFilter.correlationId();
         return ResponseEntity.status(status).body(new ErrorResponse(code, message, traceId, details));
     }
 

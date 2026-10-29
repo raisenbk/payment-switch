@@ -65,6 +65,9 @@ class SecurityConfig {
         return stateless(http, entryPoint)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/health/**", "/actuator/info", "/error").permitAll()
+                        // Scraped by Prometheus. No secrets or merchant data in it; restrict it at the
+                        // network level (or a separate management port) in production.
+                        .requestMatchers("/actuator/prometheus").permitAll()
                         .anyRequest().denyAll())
                 .build();
     }

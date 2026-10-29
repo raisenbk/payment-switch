@@ -3,6 +3,8 @@ package com.paymentswitch.supplier;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.micrometer.tagged.TaggedCircuitBreakerMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,7 +24,7 @@ public class SupplierCircuitBreakers {
 
     private final CircuitBreakerRegistry registry;
 
-    SupplierCircuitBreakers(CircuitBreakerProperties properties) {
+    SupplierCircuitBreakers(CircuitBreakerProperties properties, MeterRegistry meters) {
         this.registry = CircuitBreakerRegistry.of(CircuitBreakerConfig.custom()
                 .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
                 .failureRateThreshold(properties.failureRateThreshold())
@@ -33,6 +35,8 @@ public class SupplierCircuitBreakers {
                 // After the wait, move to half-open by itself, so routing offers the supplier trial calls.
                 .automaticTransitionFromOpenToHalfOpenEnabled(true)
                 .build());
+        // resilience4j_circuitbreaker_state{name=<supplier>, state=…} and call counters per supplier.
+        TaggedCircuitBreakerMetrics.ofCircuitBreakerRegistry(registry).bindTo(meters);
     }
 
     /** The breaker for a supplier (created on first use). Public so operators and tests can inspect or force it. */

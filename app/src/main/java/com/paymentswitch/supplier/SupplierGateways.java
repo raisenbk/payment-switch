@@ -1,5 +1,7 @@
 package com.paymentswitch.supplier;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -18,13 +20,18 @@ public class SupplierGateways {
     private final Map<String, SupplierGateway> gateways;
     private final SupplierCircuitBreakers breakers;
 
-    SupplierGateways(SupplierProperties properties, SupplierCircuitBreakers breakers) {
+    SupplierGateways(SupplierProperties properties, SupplierCircuitBreakers breakers,
+            ObservationRegistry observations, MeterRegistry meters) {
         this.breakers = breakers;
+        // Breaker outside, metrics inside: only calls that really reach the supplier are timed.
         this.gateways = properties.suppliers().entrySet().stream()
                 .collect(Collectors.toUnmodifiableMap(
                         entry -> normalize(entry.getKey()),
                         entry -> new CircuitBreakingSupplierGateway(
-                                new HttpSupplierGateway(normalize(entry.getKey()), entry.getValue()),
+                                new MeteredSupplierGateway(normalize(entry.getKey()),
+                                        new HttpSupplierGateway(normalize(entry.getKey()), entry.getValue(),
+                                                observations),
+                                        meters),
                                 breakers.forSupplier(entry.getKey()))));
     }
 

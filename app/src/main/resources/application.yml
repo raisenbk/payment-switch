@@ -32,11 +32,31 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
   endpoint:
     health:
       probes:
         enabled: true
+  metrics:
+    tags:
+      application: payment-switch
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+  tracing:
+    sampling:
+      # Every request is traced (fine for a demo; lower it under real load).
+      probability: 1.0
+  otlp:
+    # Metrics are scraped by Prometheus and logs go to stdout; only traces are exported via OTLP.
+    metrics:
+      export:
+        enabled: false
+    logging:
+      export:
+        enabled: false
+  # Traces go to management.opentelemetry.tracing.export.otlp.endpoint, set by docker-compose. Unset
+  # (tests, plain local runs) they are created for log correlation but not exported.
 
 payment-switch:
   auth:
@@ -51,4 +71,4 @@ payment-switch:
 
 logging:
   pattern:
-    correlation: "[traceId=%X{traceId:-} merchantId=%X{merchantId:-} transactionId=%X{transactionId:-}] "
+    correlation: "[traceId=%X{traceId:-} spanId=%X{spanId:-} requestId=%X{requestId:-} merchantId=%X{merchantId:-} transactionId=%X{transactionId:-}] "

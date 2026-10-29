@@ -5,7 +5,10 @@ import static com.paymentswitch.transaction.TransactionStatus.UNKNOWN;
 import com.paymentswitch.supplier.SupplierGateways;
 import com.paymentswitch.supplier.SupplierResult;
 import com.paymentswitch.transaction.TransactionRepository.DueInquiry;
+import com.paymentswitch.common.tracing.TraceContexts;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.slf4j.Logger;
@@ -29,13 +32,17 @@ class InquiryScheduler {
     private final SupplierGateways gateways;
     private final SupplierOutcomes outcomes;
     private final InquiryProperties properties;
+    private final TraceContexts traces;
+    private final MeterRegistry meters;
 
     InquiryScheduler(TransactionRepository repository, SupplierGateways gateways, SupplierOutcomes outcomes,
-            InquiryProperties properties) {
+            InquiryProperties properties, TraceContexts traces, MeterRegistry meters) {
         this.repository = repository;
         this.gateways = gateways;
         this.outcomes = outcomes;
         this.properties = properties;
+        this.traces = traces;
+        this.meters = meters;
     }
 
     @Scheduled(fixedDelayString = "${payment-switch.inquiry.poll-interval:1s}")
@@ -43,7 +50,10 @@ class InquiryScheduler {
         List<DueInquiry> due = repository.claimDueInquiries(properties.batchSize(), properties.initialDelay(),
                 properties.maxDelay());
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            due.forEach(inquiry -> executor.execute(() -> inquire(inquiry)));
+            due.forEach(inquiry -> executor.execute(() -> traces.continueTrace(null, "inquiry", null,
+                    Map.of("transaction.id", inquiry.id().toString(), "inquiry.attempt",
+                            Integer.toString(inquiry.attempts())),
+                    () -> inquire(inquiry))));
         }
     }
 
@@ -55,6 +65,8 @@ class InquiryScheduler {
                     .map(gateway -> gateway.inquiry(due.id().toString()))
                     .orElseGet(() -> new SupplierResult.Unknown("SUPPLIER_NOT_CONFIGURED"));
             log.info("Inquiry {} for {} transaction: {}", due.attempts(), due.status(), result);
+            meters.counter("paymentswitch.inquiries", "kind", due.status() == UNKNOWN ? "resolve" : "verify",
+                    "result", result.getClass().getSimpleName().toLowerCase()).increment();
             if (due.status() == UNKNOWN) {
                 outcomes.applyInquiryResult(due.id(), due.supplierCode(), result, due.deadlinePassed());
             } else {

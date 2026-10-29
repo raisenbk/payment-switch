@@ -1,5 +1,8 @@
 package com.paymentswitch.common.outbox;
 
+import com.paymentswitch.common.tracing.TraceContexts;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.tracing.Span;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -26,10 +29,15 @@ public class OutboxPoller {
     private final OutboxRepository repository;
     private final OutboxProperties properties;
     private final Map<String, OutboxHandler> handlers;
+    private final TraceContexts traces;
+    private final MeterRegistry meters;
 
-    OutboxPoller(OutboxRepository repository, OutboxProperties properties, List<OutboxHandler> handlers) {
+    OutboxPoller(OutboxRepository repository, OutboxProperties properties, List<OutboxHandler> handlers,
+            TraceContexts traces, MeterRegistry meters) {
         this.repository = repository;
         this.properties = properties;
+        this.traces = traces;
+        this.meters = meters;
         this.handlers = handlers.stream().collect(Collectors.toUnmodifiableMap(OutboxHandler::eventType,
                 Function.identity()));
     }
@@ -50,14 +58,24 @@ public class OutboxPoller {
             if (handler == null) {
                 throw new IllegalStateException("No handler for event type " + event.eventType());
             }
-            handler.handle(event);
+            // Continues the trace of the request that wrote the event (ADR-009).
+            traces.continueTrace(event.traceHeaders(), "outbox " + event.eventType(), Span.Kind.CONSUMER,
+                    Map.of("outbox.event_id", Long.toString(event.id()),
+                            "outbox.aggregate_id", event.aggregateId().toString()),
+                    () -> handler.handle(event));
             repository.markProcessed(event.id());
+            count(event, "processed");
         } catch (RuntimeException e) {
+            count(event, "retry");
             Duration delay = retryDelay(event.attempts());
             log.warn("Outbox event {} ({}) failed on attempt {}, retrying in {}",
                     event.id(), event.eventType(), event.attempts(), delay, e);
             repository.scheduleRetry(event.id(), delay, e.toString());
         }
+    }
+
+    private void count(OutboxEvent event, String outcome) {
+        meters.counter("paymentswitch.outbox.events", "type", event.eventType(), "outcome", outcome).increment();
     }
 
     private Duration retryDelay(int attempts) {

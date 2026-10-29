@@ -2,7 +2,7 @@ package com.paymentswitch.common.error;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.paymentswitch.common.web.TraceIdFilter;
+import com.paymentswitch.common.web.RequestIdFilter;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.junit.jupiter.api.Test;
@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 @WebMvcTest(controllers = GlobalExceptionHandlerTest.ProbeController.class)
-@Import({GlobalExceptionHandlerTest.ProbeController.class, GlobalExceptionHandler.class, TraceIdFilter.class})
+@Import({GlobalExceptionHandlerTest.ProbeController.class, GlobalExceptionHandler.class, RequestIdFilter.class})
 class GlobalExceptionHandlerTest {
 
     @Autowired

@@ -3,6 +3,10 @@ package com.paymentswitch.webhook;
 import com.paymentswitch.merchant.MerchantWebhooks;
 import com.paymentswitch.merchant.MerchantWebhooks.WebhookTarget;
 import com.paymentswitch.webhook.WebhookRepository.DueWebhook;
+import com.paymentswitch.common.tracing.TraceContexts;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.tracing.Span;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -10,6 +14,7 @@ import java.net.http.HttpResponse;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -38,14 +43,21 @@ class WebhookDispatcher {
     private final WebhookRetryPolicy retryPolicy;
     private final Clock clock;
     private final HttpClient client;
+    private final TraceContexts traces;
+    private final MeterRegistry meters;
 
     WebhookDispatcher(WebhookRepository repository, MerchantWebhooks merchants, WebhookProperties properties,
-            Clock clock) {
+            Clock clock, TraceContexts traces, MeterRegistry meters) {
         this.repository = repository;
         this.merchants = merchants;
         this.properties = properties;
         this.retryPolicy = WebhookRetryPolicy.of(properties);
         this.clock = clock;
+        this.traces = traces;
+        this.meters = meters;
+        Gauge.builder("paymentswitch.webhooks.dead", repository, WebhookRepository::countDead)
+                .description("Dead-lettered webhooks waiting for an operator")
+                .register(meters);
         this.client = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(properties.connectTimeout())
@@ -57,7 +69,11 @@ class WebhookDispatcher {
     void poll() {
         List<DueWebhook> due = repository.claimDue(properties.batchSize(), properties.lease());
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            due.forEach(webhook -> executor.execute(() -> deliver(webhook)));
+            // Each delivery continues the trace of the transaction that completed (ADR-009).
+            due.forEach(webhook -> executor.execute(() -> traces.continueTrace(webhook.traceHeaders(),
+                    "webhook deliver", Span.Kind.CLIENT,
+                    Map.of("webhook.id", webhook.id().toString(), "webhook.attempt", Integer.toString(webhook.attempts())),
+                    () -> deliver(webhook))));
         }
     }
 
@@ -70,13 +86,16 @@ class WebhookDispatcher {
                     attempt.statusCode(), attempt.durationMs(), attempt.error());
             if (attempt.delivered()) {
                 repository.markDelivered(webhook.id());
+                count("delivered");
             } else if (retryPolicy.exhausted(webhook.attempts())) {
                 repository.markDead(webhook.id());
+                count("dead");
                 log.warn("Webhook {} dead-lettered after {} attempts (last: {})",
                         webhook.id(), webhook.attempts(), attempt);
             } else {
                 Duration delay = retryPolicy.delayAfter(webhook.attempts());
                 repository.scheduleRetry(webhook.id(), delay);
+                count("retry");
                 log.info("Webhook {} attempt {} failed ({}), retrying in {}", webhook.id(), webhook.attempts(),
                         attempt, delay);
             }
@@ -88,11 +107,17 @@ class WebhookDispatcher {
         }
     }
 
+    private void count(String outcome) {
+        meters.counter("paymentswitch.webhooks.deliveries", "outcome", outcome).increment();
+    }
+
     private Attempt send(WebhookTarget target, DueWebhook webhook) {
         long timestamp = clock.instant().getEpochSecond();
         long started = System.nanoTime();
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(target.url()))
+            HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(target.url()));
+            traces.injectCurrent(builder::header);
+            HttpRequest request = builder
                     .timeout(properties.readTimeout())
                     .header("Content-Type", "application/json")
                     .header("X-Webhook-Id", webhook.id().toString())
