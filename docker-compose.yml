@@ -62,6 +62,8 @@ services:
       # Local-development key only; set your own in .env for anything else.
       SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:-JNZXg1RmDZjrHIsESBJhQXphJL8/m69RMlf1pH8LoZo=}
       MOCK_SUPPLIER_URL: http://mock-supplier:8090
+      # Local-development admin token only (X-Admin-Token on /admin/**).
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-local-admin-token-not-secret}
     ports:
       - "${APP_PORT:-8080}:8080"
     depends_on:

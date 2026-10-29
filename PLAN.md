@@ -261,14 +261,14 @@ Legend: `[ ]` todo · `[x]` done. Each phase ends with a DoD that must be fully 
 
 ### Phase 6 — Webhooks (Week 6)
 
-- [ ] Webhook dispatcher driven by outbox events
-- [ ] Payload signed with merchant `webhook_secret` (HMAC) + timestamp header
-- [ ] Retry with exponential backoff + jitter; max attempts; then DLQ status
-- [ ] `webhook_deliveries` tracking each attempt (status code, duration)
-- [ ] Admin endpoint to list/re-drive failed deliveries
-- [ ] Delivery is at-least-once; payload includes event id so merchants can dedupe (documented)
-- [ ] Tests: merchant endpoint down → retries → success; permanent failure → DLQ
-- [ ] ADR-007: at-least-once webhook delivery
+- [x] Webhook dispatcher driven by outbox events
+- [x] Payload signed with merchant `webhook_secret` (HMAC) + timestamp header
+- [x] Retry with exponential backoff + jitter; max attempts; then DLQ status
+- [x] `webhook_deliveries` tracking each attempt (status code, duration)
+- [x] Admin endpoint to list/re-drive failed deliveries
+- [x] Delivery is at-least-once; payload includes event id so merchants can dedupe (documented)
+- [x] Tests: merchant endpoint down → retries → success; permanent failure → DLQ
+- [x] ADR-007: at-least-once webhook delivery
 
 **DoD:** webhook behavior verified with a stub merchant server (WireMock or similar).
 
@@ -377,3 +377,4 @@ Rules: no `Thread.sleep` for synchronization (use Awaitility); tests must be det
 | 2026-10-28 | 3 | No stored balance at all: balances = SUM(entries), per-merchant FOR NO KEY UPDATE lock on the balance account, system accounts never locked (no hot rows). Added `ledger_holds` (hold lifecycle) and `CASH` account (counter-side of top-ups), not in the original schema. DB triggers enforce balanced single-currency journals and immutability. Ledger tests passed 10/10 runs; removing the lock makes the 1000-hold test fail (601 successes). See ADR-003/004. |
 | 2026-10-28 | 4 | POST returns 202 PENDING; supplier processing starts after commit via an async AFTER_COMMIT listener (in-memory, replaced by the outbox in Phase 5; until then a crash after commit leaves the transaction PENDING). Supplier cost frozen on the transaction at routing time. Connection refused on submit = FAILED (nothing sent); read timeout/5xx/pending = UNKNOWN; inquiry 404 = FAILED (supplier contract). mock-supplier is chosen by destination suffix; e2e tests run its real jar via Testcontainers. Local profile seeds a demo merchant + products. See ADR-005. |
 | 2026-10-29 | 5 | Outbox claim = one `UPDATE … FROM (SELECT … FOR UPDATE SKIP LOCKED)` statement that also leases the rows (available_at pushed forward), handlers run on virtual threads, retry with capped exponential backoff; at-least-once, so handlers are idempotent. Crash in PROCESSING → resubmit with the same reference (supplier dedupes, 409 + stored outcome); `supplier_sku` now frozen on the transaction for that. Inquiry schedule stored on `transactions` (next_inquiry_at/attempts/deadline), same claiming technique; MANUAL_REVIEW keeps the hold. Late answers (CAS lost against a contradicting final status, or the post-failure verification inquiry finding SUCCESS) go to `transaction_discrepancies`, never auto-applied. Added mock behaviours 77 (stuck pending) and 88 (slow success, 404 while processing). Processing now starts within one poll (250ms) instead of immediately. See ADR-006 and the ADR-005 addendum. |
+| 2026-10-29 | 6 | Final status (SUCCESS/FAILED) publishes `transaction.completed` to the outbox inside the state machine; its handler creates one `webhook_events` row (unique per outbox event) holding the merchant-facing event id and the frozen JSON body. Merchants without `callback_url` get none. Signature = hex(HMAC(webhook_secret, timestamp + "." + body)). Only 2xx counts; backoff 30s doubling to 6h with jitter in the upper half; DEAD after 10 attempts; attempts append-only in `webhook_deliveries`. Admin API (`/admin/webhooks`, re-drive) behind a shared `X-Admin-Token` (constant-time, disabled when unset) — a stand-in for real operator auth. mock-supplier gained a demo webhook receiver; the demo merchant's webhooks go there. See ADR-007. |

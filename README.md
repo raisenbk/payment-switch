@@ -8,7 +8,7 @@ resolves ambiguous (timed-out) results safely and notifies the merchant by webho
 
 > Portfolio project. No real money, suppliers, credentials or customer data.
 
-**Status:** Phase 5 (outbox + UNKNOWN resolution) — see [PLAN.md](PLAN.md) for the roadmap.
+**Status:** Phase 6 (webhooks) — see [PLAN.md](PLAN.md) for the roadmap.
 
 ## Quick start
 
@@ -99,6 +99,37 @@ Mutating requests also need an `Idempotency-Key` header. Re-sending the same req
 key returns the original response (with `Idempotent-Replayed: true`) without executing it again;
 reusing a key for a different request returns `409`.
 
+## Webhooks
+
+When a transaction reaches `SUCCESS` or `FAILED`, the merchant's callback URL receives:
+
+```http
+POST <callback_url>
+Content-Type: application/json
+X-Webhook-Id: 6f1c…                      (same on every retry: deduplicate on it)
+X-Webhook-Timestamp: 1761700000
+X-Webhook-Signature: hex(HMAC_SHA256(webhook_secret, X-Webhook-Timestamp + "." + raw body))
+
+{"id":"6f1c…","type":"transaction.succeeded","createdAt":"…","data":{ …transaction as in GET… }}
+```
+
+Delivery is **at-least-once** and unordered: answer 2xx within 5s, deduplicate on `id`, verify the
+signature over the raw body and reject old timestamps. Failed attempts are retried with exponential
+backoff and jitter. After 10 attempts the webhook is dead-lettered, and an operator can re-drive it:
+
+```bash
+curl -H "X-Admin-Token: local-admin-token-not-secret" "http://localhost:8080/admin/webhooks?status=DEAD"
+```
+```bash
+curl -X POST -H "X-Admin-Token: local-admin-token-not-secret" http://localhost:8080/admin/webhooks/<id>/redrive
+```
+
+Locally, the demo merchant's webhooks go to a receiver inside mock-supplier, so you can see them:
+
+```bash
+curl http://localhost:8090/webhooks/demo
+```
+
 ## Error format
 
 Every error response has the same shape, and the trace id is also returned in `X-Request-Id`:
@@ -115,3 +146,4 @@ Every error response has the same shape, and the trace id is also returned in `X
 - [ADR-004: Ledger locking strategy](docs/adr/0004-ledger-locking-strategy.md)
 - [ADR-005: A supplier timeout is UNKNOWN, not FAILED](docs/adr/0005-timeout-means-unknown.md)
 - [ADR-006: Transactional outbox](docs/adr/0006-transactional-outbox.md)
+- [ADR-007: At-least-once, signed webhook delivery](docs/adr/0007-at-least-once-webhooks.md)

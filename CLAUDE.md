@@ -60,6 +60,10 @@ Actions, Micrometer + Prometheus + Grafana, OpenTelemetry, k6. Kafka/Kubernetes 
   the business transaction, plus an idempotent `OutboxHandler` bean for the event type (ADR-006).
   Supplier answers are applied only through `SupplierOutcomes`; UNKNOWN transactions are resolved
   by `InquiryScheduler`, and contradicting late answers go to `transaction_discrepancies`.
+- Webhooks: reaching SUCCESS/FAILED publishes `transaction.completed`; the webhook module turns it
+  into a `webhook_events` row and `WebhookDispatcher` delivers it (ADR-007). Merchant callback URL and
+  secret come from `merchant.MerchantWebhooks`. `/admin/**` needs `X-Admin-Token`; tests stub merchant
+  endpoints with WireMock and create webhook merchants via `TestMerchants.createWithWebhook(url)`.
 - Build from the repository root: the app's integration tests run `mock-supplier/target/mock-supplier.jar`
   in a container, so `-pl app` alone needs that jar built first (`-am` or a full `verify`).
 - Local demo: `docker compose up --build -d`, then `./scripts/signed-curl.sh` (demo merchant seeded
