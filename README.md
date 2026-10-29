@@ -2,82 +2,107 @@
 
 [![CI](https://github.com/raisenbk/payment-switch/actions/workflows/ci.yml/badge.svg)](https://github.com/raisenbk/payment-switch/actions/workflows/ci.yml)
 
-A mini payment switch / biller aggregator. Merchants submit top-up, data and voucher requests;
-the switch debits their balance through a double-entry ledger, routes the request to a supplier,
-resolves ambiguous (timed-out) results safely and notifies the merchant by webhook.
+A mini **payment switch / biller aggregator**: merchants buy prepaid top-ups, data packages and
+vouchers through a signed API. The switch:
+- debits their balance through a double-entry ledger;
+- routes each request to one of several suppliers;
+- resolves ambiguous (timed-out) supplier results without ever refunding on a guess;
+- notifies the merchant by signed webhook;
+- reconciles the suppliers' settlement files against its own books.
 
-> Portfolio project. No real money, suppliers, credentials or customer data.
+> Portfolio project (Java 21, Spring Boot 4, PostgreSQL). No real money, suppliers, credentials or
+> customer data. Everything here is fictional.
 
-**Status:** Phase 7 (routing, failover, reconciliation) — see [PLAN.md](PLAN.md) for the roadmap.
+## The problem it solves
 
-## Quick start
+Selling prepaid credit through third-party suppliers looks simple: take the merchant's money and
+call the supplier. The hard parts are what happens when something goes wrong:
 
-Requires Docker (and `openssl` for request signing).
+- **The supplier times out.** Did the customer get the credit or not? Refunding is wrong if they
+  did, and keeping the money is wrong if they did not. Retrying at another supplier can top them up
+  twice.
+- **Requests are retried.** The merchant's network drops the response, so the merchant sends the
+  same order again.
+- **Many requests arrive at once** for the same merchant balance.
+- **The process crashes** between "money held" and "supplier called".
+- **The merchant's webhook endpoint is down** for hours.
+- **The supplier's bill does not match** what we think happened.
+
+This project handles each of these explicitly and proves it with tests (see
+[Design decisions](#design-decisions)).
+
+## Run it (3 commands)
+
+Requires Docker, plus `openssl` and `curl` for signing requests.
 
 ```bash
 git clone https://github.com/raisenbk/payment-switch.git && cd payment-switch
+```
+```bash
 docker compose up --build -d
+```
+```bash
 ./scripts/signed-curl.sh POST /v1/transactions '{"merchantRef":"order-1","productCode":"PULSA10","destination":"081234567890"}'
 ```
 
-The `local` profile seeds a demo merchant (`pk_demo_local`, balance 1,000,000 IDR), products
-`PULSA10`, `PULSA25`, `DATA5GB` and the mock supplier `MOCKA`. The POST returns `202` with a
-`PENDING` transaction; fetch it with `./scripts/signed-curl.sh GET /v1/transactions/<id>`.
+The last command returns `202` with a `PENDING` transaction. Less than a second later
+`./scripts/signed-curl.sh GET /v1/transactions/<id>` shows `SUCCESS`. Then open:
 
-The mock supplier's behavior is chosen by the **last two digits of the destination**:
+| What | Where |
+|---|---|
+| API docs (Swagger UI) | http://localhost:8081 |
+| Grafana dashboard *Payment Switch* (no login) | http://localhost:3000 |
+| Traces (Jaeger), service `payment-switch` | http://localhost:16686 |
+| Prometheus | http://localhost:9090 |
+| Webhooks the demo merchant received | http://localhost:8090/webhooks/demo |
 
-| Ends with | Supplier behavior | Resulting status |
+If port 5432 is taken on your machine, start with `DB_PORT=5433 docker compose up --build -d`. Every
+port binds to `127.0.0.1` only.
+
+### Things to try
+
+The `local` profile seeds a demo merchant (`pk_demo_local`, 1,000,000 IDR), the products `PULSA10`,
+`PULSA25` and `DATA5GB`, and three mock suppliers. The mock supplier's behaviour is chosen by the
+**last two digits of the destination**:
+
+| Destination ends with | Supplier does | You will see |
 |---|---|---|
-| anything else | success | `SUCCESS` |
-| `11` | definitive failure | `FAILED` (hold released) |
-| `22` / `33` | answers after the read timeout (then succeeds / fails) | `UNKNOWN` → inquiry → `SUCCESS` / `FAILED` |
+| anything else | succeeds | `SUCCESS`, hold captured, webhook `transaction.succeeded` |
+| `11` | rejects the number | `FAILED`, hold released, **no failover** (customer error) |
+| `22` / `33` | answers after our read timeout | `UNKNOWN` (hold kept) → inquiry → `SUCCESS` / `FAILED` |
 | `44` | answers `PENDING`, completes later | `UNKNOWN` → inquiry → `SUCCESS` |
 | `55` | processes, then returns HTTP 500 | `UNKNOWN` → inquiry → `SUCCESS` |
 | `66` | rejects the request (HTTP 400) | `FAILED` |
-| `77` | answers `PENDING` forever | `UNKNOWN` → `MANUAL_REVIEW` after the max window (hold kept) |
-| `88` | processes slowly, invisible to inquiries at first | `FAILED`, then flagged as a `LATE_SUCCESS` discrepancy |
+| `77` | answers `PENDING` forever | `UNKNOWN` → `MANUAL_REVIEW` after 2 min, hold kept |
+| `88` | processes slowly, 404 to inquiries at first | `FAILED`, then flagged as a `LATE_SUCCESS` discrepancy |
 
-Supplier `MOCKOOS` is always out of stock. The demo product `DATA5GB` is routed there first, so
-buying it shows a **failover** to `MOCKA` in the transaction history.
-
-The `local` profile uses a short inquiry schedule so you can watch this happen: first inquiry after
-5s, `MANUAL_REVIEW` after 2 minutes, late-success verification after 1 minute (production defaults:
-30s, 24h, 1h).
-
-## Development
-
-| Task | With a local JDK 21 | Without a JDK (runs Maven in Docker) |
-|---|---|---|
-| Build + all tests | `./mvnw verify` | `./scripts/mvn-docker.sh verify` |
-| Run only Postgres/Redis | `docker compose up postgres redis` | same |
-| Run the app locally | `./mvnw -pl app spring-boot:run` | `docker compose up --build app` |
-
-Integration tests use [Testcontainers](https://testcontainers.com/), so Docker must be running.
-
-Configuration comes from environment variables; see [.env.example](.env.example).
+The product `DATA5GB` is routed first to `MOCKOOS`, a supplier that is always out of stock, so
+buying it shows a **failover** to `MOCKA`. The local inquiry schedule is short so you can watch it
+happen: first inquiry after 5s, `MANUAL_REVIEW` after 2 minutes (production defaults: 30s and 24h).
 
 ## Architecture
 
-Modular monolith (Java 21, Spring Boot 4, PostgreSQL, Flyway). Modules live under
-`com.paymentswitch`: `merchant`, `catalog`, `transaction`, `ledger`, `routing`, `supplier`,
-`webhook`, `recon`, `common`. Details and diagrams will land in `docs/architecture.md`.
-
-`mock-supplier/` is a separate Spring Boot app that simulates suppliers. The app's end-to-end
-tests run its packaged jar in a container.
-
-Transaction lifecycle:
+A modular monolith with clear module boundaries. Diagrams of the context, modules, transaction
+flow, state machine and ledger postings are in **[docs/architecture.md](docs/architecture.md)**.
 
 ```
 PENDING ─▶ PROCESSING ─▶ SUCCESS   (hold captured)
-                 ├──────▶ FAILED    (hold released)
-                 └──────▶ UNKNOWN   (hold kept) ─inquiry─▶ SUCCESS | FAILED
-                              └─max window─▶ MANUAL_REVIEW (hold kept, operator decides)
+             │  │  └───▶ FAILED    (hold released)
+             │  └──────▶ PROCESSING at the next supplier (failover, definitive failures only)
+             └─────────▶ UNKNOWN   (hold kept) ─inquiry─▶ SUCCESS | FAILED
+                              └─max window─▶ MANUAL_REVIEW (operator decides)
 ```
 
-Work that must happen after a commit (calling the supplier, later webhooks) goes through a
-transactional outbox: the event is written in the same database transaction as the state change
-and picked up by a `SKIP LOCKED` poller, so a crash never loses an accepted transaction. Supplier
-answers that contradict a status we already finalised are recorded in `transaction_discrepancies`.
+| Module | Responsibility |
+|---|---|
+| `merchant` | HMAC request authentication, admin token, webhook targets, operator top-ups |
+| `transaction` | state machine, processing, inquiries, late-answer detection |
+| `ledger` | double-entry accounts, holds, captures, balances = sum of entries |
+| `routing` | supplier selection and failover rules |
+| `supplier` | HTTP gateways, per-supplier circuit breakers, latency metrics |
+| `webhook` | signed at-least-once delivery, retries with jitter, dead letter, re-drive |
+| `recon` | Spring Batch settlement reconciliation |
+| `common` | transactional outbox, idempotency, errors, money, trace propagation |
 
 ## Calling the API
 
@@ -89,7 +114,7 @@ X-Timestamp: <unix seconds, within ±5 min of server time>
 X-Signature: hex(HMAC_SHA256(secret, METHOD \n PATH_WITH_QUERY \n X-Timestamp \n hex(SHA256(body))))
 ```
 
-[`scripts/signed-curl.sh`](scripts/signed-curl.sh) does this for you. By hand with `curl` and `openssl`:
+[`scripts/signed-curl.sh`](scripts/signed-curl.sh) does this for you as the demo merchant. By hand:
 
 ```bash
 API_KEY=pk_demo_local SECRET=sk_demo_local_only_not_secret TS=$(date +%s)
@@ -98,47 +123,16 @@ SIG=$(printf 'GET\n/v1/me\n%s\n%s' "$TS" "$BODY_HASH" | openssl dgst -sha256 -hm
 curl -H "X-Api-Key: $API_KEY" -H "X-Timestamp: $TS" -H "X-Signature: $SIG" http://localhost:8080/v1/me
 ```
 
-Mutating requests also need an `Idempotency-Key` header. Re-sending the same request with the same
-key returns the original response (with `Idempotent-Replayed: true`) without executing it again;
-reusing a key for a different request returns `409`.
-
-## Routing, failover and circuit breaking
-
-Each product can be mapped to several suppliers. Routing takes the eligible ones, which are active,
-in the right currency, not more expensive than the price, not already tried and not behind an open
-circuit. It then ranks them by health, priority, success rate and cost. If a supplier answers with
-a **definitive** failure (out of stock, unreachable, rejected), the transaction fails over to the
-next supplier. An **ambiguous** answer (timeout) never fails over: that could top the customer up
-twice ([ADR-008](docs/adr/0008-failover-rules.md)). A circuit breaker per supplier removes a failing
-supplier from routing for 30 seconds.
-
-## Reconciliation
-
-Suppliers send a daily settlement CSV of what they bill us:
-
-```csv
-reference,supplier_ref,sku,destination,amount,currency,completed_at
-5f0c3c1e-…,MS-1A2B3C4D,A-PULSA10,081234567890,10000,IDR,2026-10-29T02:06:13Z
-```
-
-Importing it runs a Spring Batch job that matches every line against our transactions and our
-day's successes against the file. It classifies each one as `MATCHED`, `AMOUNT_DIFF`,
-`MISSING_INTERNAL` (billed, but not a success on our side), `MISSING_SUPPLIER` (our success, not
-billed) or `DUPLICATE`. Re-importing the same file is a no-op (SHA-256 checksum).
-
-```bash
-curl -s http://localhost:8090/suppliers/MOCKA/settlements/$(date -u +%F)?discrepancies=true > mocka.csv
-```
-```bash
-curl -s -X POST -H "X-Admin-Token: local-admin-token-not-secret" -H "Content-Type: text/csv" --data-binary @mocka.csv "http://localhost:8080/admin/recon/settlements?supplier=MOCKA&businessDate=$(date -u +%F)"
-```
-```bash
-curl -s -H "X-Admin-Token: local-admin-token-not-secret" http://localhost:8080/admin/recon/settlements/1/discrepancies.csv
-```
-
-The mock supplier generates the file from what it really processed. `discrepancies=true` seeds one
-of each mistake: a line dropped, an amount raised by 100, a line duplicated and an unknown
-reference added.
+- **Idempotency.** `POST /v1/transactions` needs an `Idempotency-Key`. The same request with the
+  same key returns the original response (`Idempotent-Replayed: true`) without executing it again.
+  A different request with the same key returns `409`.
+- **Errors** all have the same shape. `traceId` is the OpenTelemetry trace id, also returned as
+  `X-Trace-Id`, so you can look the request up in Jaeger:
+  ```json
+  { "code": "VALIDATION_FAILED", "message": "Request validation failed", "traceId": "4bf92f35…", "details": [] }
+  ```
+- The full contract, including the webhook payload, is in [docs/openapi.yaml](docs/openapi.yaml)
+  (shown by Swagger UI). A test fails if the spec and the controllers ever disagree.
 
 ## Webhooks
 
@@ -146,7 +140,6 @@ When a transaction reaches `SUCCESS` or `FAILED`, the merchant's callback URL re
 
 ```http
 POST <callback_url>
-Content-Type: application/json
 X-Webhook-Id: 6f1c…                      (same on every retry: deduplicate on it)
 X-Webhook-Timestamp: 1761700000
 X-Webhook-Signature: hex(HMAC_SHA256(webhook_secret, X-Webhook-Timestamp + "." + raw body))
@@ -154,38 +147,100 @@ X-Webhook-Signature: hex(HMAC_SHA256(webhook_secret, X-Webhook-Timestamp + "." +
 {"id":"6f1c…","type":"transaction.succeeded","createdAt":"…","data":{ …transaction as in GET… }}
 ```
 
-Delivery is **at-least-once** and unordered: answer 2xx within 5s, deduplicate on `id`, verify the
-signature over the raw body and reject old timestamps. Failed attempts are retried with exponential
-backoff and jitter. After 10 attempts the webhook is dead-lettered, and an operator can re-drive it:
+Delivery is **at-least-once** and unordered. Failed attempts are retried with exponential backoff
+and jitter. After 10 attempts the webhook is dead-lettered, and an operator can list and re-drive it:
 
 ```bash
 curl -H "X-Admin-Token: local-admin-token-not-secret" "http://localhost:8080/admin/webhooks?status=DEAD"
 ```
+
+## Reconciliation
+
+Suppliers send a daily CSV of what they bill us. Importing it runs a Spring Batch job. The job
+classifies every line, and every one of our successes that day, as one of:
+- `MATCHED`
+- `AMOUNT_DIFF`
+- `MISSING_INTERNAL`: billed, but not a success on our side
+- `MISSING_SUPPLIER`: our success, but not billed
+- `DUPLICATE`
+
+Re-importing the same file changes nothing (SHA-256 checksum). Try it with a file the mock supplier
+generates, with one of each mistake seeded in:
+
 ```bash
-curl -X POST -H "X-Admin-Token: local-admin-token-not-secret" http://localhost:8080/admin/webhooks/<id>/redrive
+curl -s "http://localhost:8090/suppliers/MOCKA/settlements/$(date -u +%F)?discrepancies=true" > mocka.csv
 ```
-
-Locally, the demo merchant's webhooks go to a receiver inside mock-supplier, so you can see them:
-
 ```bash
-curl http://localhost:8090/webhooks/demo
+curl -s -X POST -H "X-Admin-Token: local-admin-token-not-secret" -H "Content-Type: text/csv" --data-binary @mocka.csv "http://localhost:8080/admin/recon/settlements?supplier=MOCKA&businessDate=$(date -u +%F)"
 ```
 
-## Error format
-
-Every error response has the same shape, and the trace id is also returned in `X-Request-Id`:
-
-```json
-{ "code": "VALIDATION_FAILED", "message": "Request validation failed", "traceId": "…", "details": [] }
-```
+The response is the report. `GET /admin/recon/settlements/{id}/discrepancies.csv` exports the
+discrepancies.
 
 ## Design decisions
 
-- [ADR-001: Modular monolith over microservices](docs/adr/0001-modular-monolith.md)
-- [ADR-002: HMAC request signing and idempotency](docs/adr/0002-hmac-signing-and-idempotency.md)
-- [ADR-003: Double-entry ledger instead of a mutable balance column](docs/adr/0003-double-entry-ledger.md)
-- [ADR-004: Ledger locking strategy](docs/adr/0004-ledger-locking-strategy.md)
-- [ADR-005: A supplier timeout is UNKNOWN, not FAILED](docs/adr/0005-timeout-means-unknown.md)
-- [ADR-006: Transactional outbox](docs/adr/0006-transactional-outbox.md)
-- [ADR-007: At-least-once, signed webhook delivery](docs/adr/0007-at-least-once-webhooks.md)
-- [ADR-008: Failover only after a definitive failure, never from UNKNOWN](docs/adr/0008-failover-rules.md)
+Each important choice has a short ADR with context, decision and consequences:
+
+| ADR | Decision |
+|---|---|
+| [001](docs/adr/0001-modular-monolith.md) | Modular monolith instead of microservices |
+| [002](docs/adr/0002-hmac-signing-and-idempotency.md) | HMAC request signing; idempotency key claimed in the same DB transaction as the action |
+| [003](docs/adr/0003-double-entry-ledger.md) | Double-entry ledger, balance = sum of entries, no mutable balance column |
+| [004](docs/adr/0004-ledger-locking-strategy.md) | Per-merchant row lock on the balance account, READ COMMITTED |
+| [005](docs/adr/0005-timeout-means-unknown.md) | A supplier timeout is `UNKNOWN`, not `FAILED`; inquiries, `MANUAL_REVIEW`, late answers flagged |
+| [006](docs/adr/0006-transactional-outbox.md) | Transactional outbox with `SKIP LOCKED` leases; crash recovery resubmits with the same reference |
+| [007](docs/adr/0007-at-least-once-webhooks.md) | At-least-once signed webhooks, backoff + jitter, dead letter, re-drive |
+| [008](docs/adr/0008-failover-rules.md) | Failover only after a definitive failure, never from `UNKNOWN`; circuit breaker per supplier |
+| [009](docs/adr/0009-trace-context-through-the-outbox.md) | Trace context stored with outbox and webhook events, so one trace follows a transaction |
+
+## Test strategy
+
+All tests run in CI on every push (`./mvnw verify`). There are about 200 of them across these layers:
+
+- **Unit tests** for pure decision logic, each tested as a decision table: state transitions,
+  routing ranking, reconciliation classification, retry backoff and jitter, circuit breaker
+  health rules, signature vectors computed independently with `openssl`.
+- **Integration tests** against real PostgreSQL (Testcontainers) and the real mock-supplier jar
+  in a container. They send real signed HTTP requests. Every ambiguous-result, failover,
+  crash-recovery, webhook-retry and reconciliation scenario is covered end to end.
+- **Concurrency tests**:
+  - 50 parallel identical requests execute once;
+  - 1000 parallel holds never overdraw a balance;
+  - competing outbox and webhook pollers handle each event exactly once.
+- **Invariant checks** after every money-related test: debits = credits, every journal balances,
+  no merchant account below zero, held balance = active holds.
+- **Mutation checks** (done by hand, recorded in [PLAN.md](PLAN.md)): the concurrency and failover
+  tests were run against deliberately broken code, to confirm they catch the bug:
+  - no lock;
+  - check-then-insert idempotency;
+  - `SKIP LOCKED` removed;
+  - failover from `UNKNOWN`.
+
+## Observability and performance
+
+- Grafana dashboard (provisioned from [ops/grafana](ops/grafana)): throughput, success ratio, open
+  `UNKNOWN`/`MANUAL_REVIEW`, API p95/p99, supplier latency and outcomes, circuit state, outbox lag,
+  webhook retries and dead letters, failovers and discrepancies.
+- Traces in Jaeger follow one transaction from the API through the outbox to the supplier and the
+  webhook (ADR-009). Logs are structured JSON with `traceId`, `merchantId` and `transactionId`.
+- Load tests with k6 ([loadtest/](loadtest)): steady load, burst, and a supplier timeout storm.
+  Results are recorded in **[docs/performance.md](docs/performance.md)**. There are no numbers yet:
+  the page stays a template until real runs are measured.
+
+```bash
+./scripts/k6.sh steady
+```
+
+## Development
+
+| Task | With a local JDK 21 | Without a JDK (Maven in Docker) |
+|---|---|---|
+| Build + all tests | `./mvnw verify` | `./scripts/mvn-docker.sh verify` |
+| Run the stack | `docker compose up --build -d` | same |
+
+Integration tests need Docker. Configuration comes from environment variables, listed in
+[.env.example](.env.example). The demo keys, tokens and secrets in this repository are local
+development values and are marked as such.
+
+The roadmap and the decisions made along the way are in [PLAN.md](PLAN.md). Notes for AI-assisted
+development are in [CLAUDE.md](CLAUDE.md).

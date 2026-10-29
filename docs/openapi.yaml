@@ -1,0 +1,574 @@
+openapi: 3.1.0
+info:
+  title: Payment Switch API
+  version: "1.0"
+  summary: Mini payment switch / biller aggregator (portfolio project, fictional data only).
+  description: |
+    Merchants buy prepaid top-ups, data packages and vouchers. The switch debits the merchant's
+    balance through a double-entry ledger, routes the request to a supplier, resolves ambiguous
+    (timed-out) results safely and notifies the merchant by webhook.
+
+    ## Authentication (merchant API, `/v1/**`)
+
+    Every request is signed with the merchant's API secret:
+
+    ```
+    X-Api-Key:   <api key>
+    X-Timestamp: <unix seconds, within ±5 minutes of server time>
+    X-Signature: hex(HMAC_SHA256(secret, METHOD + "\n" + PATH_WITH_QUERY + "\n" + X-Timestamp + "\n" + hex(SHA256(body))))
+    ```
+
+    A browser form cannot sign requests, so "Try it out" is disabled here. Use
+    `scripts/signed-curl.sh` (it signs as the local demo merchant) or see the README for a plain
+    `curl` + `openssl` example. Request bodies are limited to 64 KB.
+
+    ## Idempotency
+
+    `POST /v1/transactions` requires an `Idempotency-Key` header. Re-sending the same request with
+    the same key returns the original response with `Idempotent-Replayed: true` and does not execute
+    it again. Reusing a key for a different request returns `409 IDEMPOTENCY_KEY_REUSED`.
+
+    ## Asynchronous outcome
+
+    Creating a transaction returns `202` with status `PENDING`. The outcome arrives by webhook
+    (see *Webhooks*) or by polling `GET /v1/transactions/{id}`. `UNKNOWN` means the supplier's answer
+    was ambiguous (e.g. a timeout). The money stays held while inquiries resolve it, and it is never
+    refunded on a guess.
+
+    ## Operator API (`/admin/**`)
+
+    Authenticated with the shared `X-Admin-Token` header. The admin API is disabled when no token is
+    configured.
+
+    ## Errors
+
+    Every error uses the `Error` schema. `traceId` is the OpenTelemetry trace id of the request,
+    also returned in the `X-Trace-Id` header.
+servers:
+  - url: http://localhost:8080
+    description: Local docker compose stack
+tags:
+  - name: Merchant API
+  - name: Operator API
+security:
+  - merchantSignature: []
+
+paths:
+  /v1/me:
+    get:
+      tags: [Merchant API]
+      summary: The calling merchant
+      description: Handy for checking that request signing works.
+      operationId: getMe
+      parameters:
+        - $ref: "#/components/parameters/Timestamp"
+        - $ref: "#/components/parameters/Signature"
+      responses:
+        "200":
+          description: The merchant
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Merchant" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/transactions:
+    post:
+      tags: [Merchant API]
+      summary: Create a transaction (top-up, data, voucher)
+      description: |
+        Validates the request, places a hold on the merchant's balance and accepts the transaction.
+        The supplier is called afterwards, so the response is always `PENDING`.
+      operationId: createTransaction
+      parameters:
+        - $ref: "#/components/parameters/Timestamp"
+        - $ref: "#/components/parameters/Signature"
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Unique per logical request; reuse it when retrying.
+          schema: { type: string, pattern: "^[A-Za-z0-9_-]{1,100}$" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTransactionRequest" }
+            example:
+              merchantRef: order-1001
+              productCode: PULSA10
+              destination: "081234567890"
+      responses:
+        "202":
+          description: Accepted. Pending supplier processing.
+          headers:
+            Idempotent-Replayed:
+              description: "`true` when this is the stored response of an earlier identical request."
+              schema: { type: string, enum: ["true"] }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Transaction" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: "`DUPLICATE_MERCHANT_REF` (merchantRef used before) or `IDEMPOTENCY_KEY_REUSED`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          description: "`PAYLOAD_TOO_LARGE`: body over 64 KB"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: "`INSUFFICIENT_BALANCE` or `PRODUCT_NOT_AVAILABLE`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/transactions/{id}:
+    get:
+      tags: [Merchant API]
+      summary: Get a transaction
+      operationId: getTransaction
+      parameters:
+        - $ref: "#/components/parameters/Timestamp"
+        - $ref: "#/components/parameters/Signature"
+        - $ref: "#/components/parameters/UuidId"
+      responses:
+        "200":
+          description: The transaction
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Transaction" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /admin/merchants/{merchantId}/top-ups:
+    post:
+      tags: [Operator API]
+      summary: Credit a merchant's balance (deposit received)
+      description: Idempotent per `reference`; the same reference books the top-up once.
+      operationId: topUpMerchant
+      security: [{ adminToken: [] }]
+      parameters:
+        - name: merchantId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, currency, reference]
+              properties:
+                amount: { type: integer, format: int64, minimum: 1, description: Minor units }
+                currency: { type: string, pattern: "^[A-Z]{3}$", example: IDR }
+                reference: { type: string, pattern: "^[A-Za-z0-9._:-]{1,64}$", example: bank-trf-0001 }
+      responses:
+        "201":
+          description: Booked (or already booked with this reference)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  journalId: { type: string, format: uuid }
+                  balance: { $ref: "#/components/schemas/Balance" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /admin/webhooks:
+    get:
+      tags: [Operator API]
+      summary: List webhooks with their delivery attempts
+      operationId: listWebhooks
+      security: [{ adminToken: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [PENDING, DELIVERED, DEAD] }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Webhook" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /admin/webhooks/{id}:
+    get:
+      tags: [Operator API]
+      summary: Get one webhook with its delivery attempts
+      operationId: getWebhook
+      security: [{ adminToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/UuidId"
+      responses:
+        "200":
+          description: The webhook
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Webhook" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /admin/webhooks/{id}/redrive:
+    post:
+      tags: [Operator API]
+      summary: Re-queue a dead-lettered webhook
+      description: Same event id and body, with a fresh set of attempts.
+      operationId: redriveWebhook
+      security: [{ adminToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/UuidId"
+      responses:
+        "202":
+          description: Queued again
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Webhook" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`WEBHOOK_NOT_DEAD`: only DEAD webhooks can be re-driven"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /admin/recon/settlements:
+    post:
+      tags: [Operator API]
+      summary: Import and reconcile a supplier settlement file
+      description: |
+        Runs the reconciliation job synchronously. Importing exactly the same content again returns
+        the earlier result (`200`, `alreadyImported: true`) without re-running. A file with an invalid
+        line is rejected as a whole and nothing is stored.
+      operationId: importSettlement
+      security: [{ adminToken: [] }]
+      parameters:
+        - name: supplier
+          in: query
+          required: true
+          schema: { type: string, example: MOCKA }
+        - name: businessDate
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: fileName
+          in: query
+          description: Defaults to `<SUPPLIER>_<businessDate>.csv`
+          schema: { type: string, pattern: "^[A-Za-z0-9._-]{1,255}$" }
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: { type: string }
+            example: |
+              reference,supplier_ref,sku,destination,amount,currency,completed_at
+              5f0c3c1e-8a5d-4c49-9d4e-8a1f2b3c4d5e,MS-1A2B3C4D,A-PULSA10,081234567890,10000,IDR,2026-10-29T02:06:13Z
+      responses:
+        "201":
+          description: Imported and reconciled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettlementReport" }
+        "200":
+          description: This exact file was imported before
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettlementReport" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422":
+          description: "`INVALID_SETTLEMENT_FILE` (message names the line) or `UNKNOWN_SUPPLIER`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    get:
+      tags: [Operator API]
+      summary: List imported settlement files
+      operationId: listSettlements
+      security: [{ adminToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SettlementFile" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /admin/recon/settlements/{id}:
+    get:
+      tags: [Operator API]
+      summary: Reconciliation report of one file
+      operationId: getSettlement
+      security: [{ adminToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/LongId"
+      responses:
+        "200":
+          description: Summary and every discrepancy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettlementReport" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /admin/recon/settlements/{id}/discrepancies.csv:
+    get:
+      tags: [Operator API]
+      summary: Discrepancies of one file as CSV
+      operationId: exportDiscrepancies
+      security: [{ adminToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/LongId"
+      responses:
+        "200":
+          description: One line per non-matching result
+          content:
+            text/csv:
+              schema: { type: string }
+              example: |
+                match_status,transaction_id,line_no,reference,supplier_ref,internal_status,internal_amount,supplier_amount,diff_amount,currency
+                AMOUNT_DIFF,8253bb1d-27f5-4265-aab2-189e91022cbb,2,8253bb1d-27f5-4265-aab2-189e91022cbb,MS-4A2D9109,SUCCESS,10000,10100,100,IDR
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+webhooks:
+  transaction.completed:
+    post:
+      summary: A transaction reached SUCCESS or FAILED
+      description: |
+        Sent to the merchant's callback URL. Delivery is **at-least-once** and unordered:
+        deduplicate on `id` (also in `X-Webhook-Id`), answer 2xx within 5 seconds and do the work
+        asynchronously. Verify `X-Webhook-Signature = hex(HMAC_SHA256(webhook_secret,
+        X-Webhook-Timestamp + "." + raw body))` in constant time and reject old timestamps.
+        Failed attempts are retried with exponential backoff and jitter, up to 10 attempts.
+      operationId: transactionCompletedWebhook
+      security: []
+      parameters:
+        - { name: X-Webhook-Id, in: header, required: true, schema: { type: string, format: uuid } }
+        - { name: X-Webhook-Timestamp, in: header, required: true, schema: { type: string, example: "1793239574" } }
+        - { name: X-Webhook-Signature, in: header, required: true, schema: { type: string } }
+        - { name: traceparent, in: header, description: W3C trace context of the switch, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookEvent" }
+      responses:
+        "2XX":
+          description: Received (anything else is retried)
+
+components:
+  securitySchemes:
+    merchantSignature:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: Together with the `X-Timestamp` and `X-Signature` headers (HMAC-SHA256, see the API description).
+    adminToken:
+      type: apiKey
+      in: header
+      name: X-Admin-Token
+
+  parameters:
+    Timestamp:
+      name: X-Timestamp
+      in: header
+      required: true
+      description: Unix seconds, within ±5 minutes of server time
+      schema: { type: string, example: "1793239574" }
+    Signature:
+      name: X-Signature
+      in: header
+      required: true
+      description: Hex HMAC-SHA256 of the canonical request (see the API description)
+      schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+    UuidId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    LongId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+
+  responses:
+    BadRequest:
+      description: "`VALIDATION_FAILED`, `MALFORMED_REQUEST` or another request problem"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: "`AUTHENTICATION_FAILED`: missing, invalid or expired authentication (deliberately not more specific)"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Not found (or not yours)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: VALIDATION_FAILED }
+        message: { type: string }
+        traceId: { type: string, description: OpenTelemetry trace id, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
+
+    Merchant:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string, enum: [ACTIVE, SUSPENDED] }
+
+    Money:
+      type: object
+      properties:
+        amount: { type: integer, format: int64, description: Minor units (IDR has none) }
+        currency: { type: string, example: IDR }
+
+    Balance:
+      type: object
+      properties:
+        available: { $ref: "#/components/schemas/Money" }
+        held: { $ref: "#/components/schemas/Money" }
+
+    CreateTransactionRequest:
+      type: object
+      required: [merchantRef, productCode, destination]
+      properties:
+        merchantRef: { type: string, maxLength: 64, pattern: "^[A-Za-z0-9._:-]+$", description: Your unique order reference }
+        productCode: { type: string, maxLength: 40, example: PULSA10 }
+        destination: { type: string, pattern: "^[0-9]{8,20}$", description: Customer phone or account number }
+
+    TransactionStatus:
+      type: string
+      enum: [PENDING, PROCESSING, SUCCESS, FAILED, UNKNOWN, MANUAL_REVIEW]
+      description: |
+        `SUCCESS` and `FAILED` are final. `UNKNOWN`: the supplier's answer was ambiguous, the money
+        stays held while inquiries resolve it. `MANUAL_REVIEW`: still unknown after the maximum
+        window; an operator decides.
+
+    Transaction:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        merchantRef: { type: string }
+        productCode: { type: string }
+        destination: { type: string }
+        amount: { type: integer, format: int64, description: Price charged to the merchant, minor units }
+        currency: { type: string }
+        status: { $ref: "#/components/schemas/TransactionStatus" }
+        supplierRef: { type: [string, "null"], description: The supplier's reference once delivered }
+        failureCode: { type: [string, "null"], example: INVALID_DESTINATION }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    WebhookEvent:
+      type: object
+      properties:
+        id: { type: string, format: uuid, description: Same on every retry; deduplicate on it }
+        type: { type: string, enum: [transaction.succeeded, transaction.failed] }
+        createdAt: { type: string, format: date-time }
+        data: { $ref: "#/components/schemas/Transaction" }
+
+    Webhook:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        merchantId: { type: string, format: uuid }
+        eventType: { type: string }
+        status: { type: string, enum: [PENDING, DELIVERED, DEAD] }
+        attempts: { type: integer, description: Attempts in the current round (reset by a re-drive) }
+        nextAttemptAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+        deliveredAt: { type: [string, "null"], format: date-time }
+        deliveries:
+          type: array
+          items:
+            type: object
+            properties:
+              attempt: { type: integer }
+              url: { type: [string, "null"] }
+              statusCode: { type: [integer, "null"], description: Null when no HTTP response arrived }
+              durationMs: { type: integer, format: int64 }
+              error: { type: [string, "null"] }
+              attemptedAt: { type: string, format: date-time }
+
+    SettlementFile:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        supplierCode: { type: string }
+        supplierId: { type: integer, format: int64 }
+        businessDate: { type: string, format: date }
+        fileName: { type: string }
+        checksum: { type: string, description: SHA-256 of the content }
+        status: { type: string, enum: [IMPORTING, COMPLETED] }
+        lineCount: { type: [integer, "null"] }
+        importedAt: { type: string, format: date-time }
+        completedAt: { type: [string, "null"], format: date-time }
+
+    MatchStatus:
+      type: string
+      enum: [MATCHED, MISSING_INTERNAL, MISSING_SUPPLIER, AMOUNT_DIFF, DUPLICATE]
+      description: |
+        `MISSING_INTERNAL`: billed, but not a success with this supplier on our side.
+        `MISSING_SUPPLIER`: our success on that business day, not in the file.
+        `AMOUNT_DIFF`: billed amount differs from the cost we booked.
+        `DUPLICATE`: the same reference billed more than once.
+
+    SettlementReport:
+      type: object
+      properties:
+        file: { $ref: "#/components/schemas/SettlementFile" }
+        alreadyImported: { type: boolean }
+        summary:
+          type: object
+          description: Count per match status
+          additionalProperties: { type: integer }
+          example: { MATCHED: 120, AMOUNT_DIFF: 1, MISSING_INTERNAL: 1, MISSING_SUPPLIER: 1, DUPLICATE: 0 }
+        discrepancies:
+          type: array
+          items:
+            type: object
+            properties:
+              matchStatus: { $ref: "#/components/schemas/MatchStatus" }
+              transactionId: { type: [string, "null"], format: uuid }
+              lineNo: { type: [integer, "null"] }
+              reference: { type: string }
+              supplierRef: { type: [string, "null"] }
+              internalStatus: { type: [string, "null"] }
+              internalAmount: { type: [integer, "null"], format: int64 }
+              supplierAmount: { type: [integer, "null"], format: int64 }
+              diffAmount: { type: [integer, "null"], format: int64, description: supplier minus internal }
+              currency: { type: [string, "null"] }

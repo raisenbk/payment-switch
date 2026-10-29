@@ -71,6 +71,10 @@ Actions, Micrometer + Prometheus + Grafana, OpenTelemetry, k6. Kafka/Kubernetes 
 - Reconciliation: Spring Batch 6 (packages `org.springframework.batch.core.*` and
   `org.springframework.batch.infrastructure.*`), job repository tables via Flyway, jobs never run at
   startup. Settlement files are imported through `/admin/recon/settlements`.
+- Observability: business metrics are `paymentswitch.*` Micrometer meters (no merchant ids as tags);
+  work handed off through the outbox/webhook queue continues its trace via `TraceContexts` (ADR-009).
+  New endpoints must be added to `docs/openapi.yaml` (`OpenApiSpecTest` enforces it).
+- Never write performance numbers into docs/performance.md that did not come from a real k6 run.
 - Build from the repository root: the app's integration tests run `mock-supplier/target/mock-supplier.jar`
   in a container, so `-pl app` alone needs that jar built first (`-am` or a full `verify`).
 - Local demo: `docker compose up --build -d`, then `./scripts/signed-curl.sh` (demo merchant seeded

@@ -298,16 +298,16 @@ Legend: `[ ]` todo · `[x]` done. Each phase ends with a DoD that must be fully 
 
 ### Phase 8 — Observability, Load Test, Docs (Week 8)
 
-- [ ] Micrometer metrics: transactions by status, supplier latency, outbox lag, webhook failures, UNKNOWN count
-- [ ] Prometheus + Grafana in Docker Compose; provisioned dashboard JSON committed
-- [ ] OpenTelemetry tracing across API → worker → supplier call
-- [ ] Structured logs with `transactionId`/`merchantId` in MDC
-- [ ] k6 load test scenarios: steady load, burst, supplier-timeout storm
+- [x] Micrometer metrics: transactions by status, supplier latency, outbox lag, webhook failures, UNKNOWN count
+- [x] Prometheus + Grafana in Docker Compose; provisioned dashboard JSON committed
+- [x] OpenTelemetry tracing across API → worker → supplier call
+- [x] Structured logs with `transactionId`/`merchantId` in MDC
+- [x] k6 load test scenarios: steady load, burst, supplier-timeout storm
 - [ ] Record results (TPS, p95/p99, error rate) in `docs/performance.md`, including test hardware
-- [ ] `openapi.yaml` complete; Swagger UI enabled
-- [ ] `docs/architecture.md` with diagrams (Mermaid)
-- [ ] README (English): problem, architecture, how to run in 3 commands, design decisions, test strategy, results
-- [ ] All ADRs reviewed and linked from README
+- [x] `openapi.yaml` complete; Swagger UI enabled
+- [x] `docs/architecture.md` with diagrams (Mermaid)
+- [x] README (English): problem, architecture, how to run in 3 commands, design decisions, test strategy, results
+- [x] All ADRs reviewed and linked from README
 
 **DoD:** a stranger can clone the repo, run `docker compose up`, hit Swagger UI, and see the Grafana dashboard.
 
@@ -379,3 +379,4 @@ Rules: no `Thread.sleep` for synchronization (use Awaitility); tests must be det
 | 2026-10-29 | 5 | Outbox claim = one `UPDATE … FROM (SELECT … FOR UPDATE SKIP LOCKED)` statement that also leases the rows (available_at pushed forward), handlers run on virtual threads, retry with capped exponential backoff; at-least-once, so handlers are idempotent. Crash in PROCESSING → resubmit with the same reference (supplier dedupes, 409 + stored outcome); `supplier_sku` now frozen on the transaction for that. Inquiry schedule stored on `transactions` (next_inquiry_at/attempts/deadline), same claiming technique; MANUAL_REVIEW keeps the hold. Late answers (CAS lost against a contradicting final status, or the post-failure verification inquiry finding SUCCESS) go to `transaction_discrepancies`, never auto-applied. Added mock behaviours 77 (stuck pending) and 88 (slow success, 404 while processing). Processing now starts within one poll (250ms) instead of immediately. See ADR-006 and the ADR-005 addendum. |
 | 2026-10-29 | 6 | Final status (SUCCESS/FAILED) publishes `transaction.completed` to the outbox inside the state machine; its handler creates one `webhook_events` row (unique per outbox event) holding the merchant-facing event id and the frozen JSON body. Merchants without `callback_url` get none. Signature = hex(HMAC(webhook_secret, timestamp + "." + body)). Only 2xx counts; backoff 30s doubling to 6h with jitter in the upper half; DEAD after 10 attempts; attempts append-only in `webhook_deliveries`. Admin API (`/admin/webhooks`, re-drive) behind a shared `X-Admin-Token` (constant-time, disabled when unset) — a stand-in for real operator auth. mock-supplier gained a demo webhook receiver; the demo merchant's webhooks go there. See ADR-007. |
 | 2026-10-29 | 7 | Routing is a pure ranking function (healthy success rate ≥ 0.80 first, then priority, success rate, cost, id; filters: active, currency, cost ≤ price, not tried, circuit not open), tested as a decision table. Failover inside PROCESSING via CAS on (status, supplier_id) + PROCESSING→PROCESSING event; only after definitive failures, never from UNKNOWN, not for INVALID_DESTINATION, max 3 suppliers; tried suppliers in `transactions.attempted_supplier_ids`. Supplier request amount is now the agreed supplier cost (what the supplier bills, as in its settlement file). Resilience4j core (no Boot starter) per supplier, submits only; unhealthy = Unknown or unreachable. Recon: settlement files uploaded via `/admin/recon/settlements` (CSV body), stored with content and SHA-256 (unique → idempotent re-import); Spring Batch 6 job (JDBC repository, schema via Flyway V8): import lines → classify (pure decision table) → MISSING_SUPPLIER by business day (UTC by default). Added DUPLICATE status (same reference billed twice) beyond the planned four. Invalid files are discarded entirely. See ADR-008. |
+| 2026-10-29 | 8 | Spring Boot 4 OpenTelemetry starter (Micrometer Tracing → OTLP) to Jaeger 2.x; Prometheus registry for metrics (OTLP metrics/log export disabled). Trace context stored with outbox and webhook events so one trace covers API → outbox → supplier → webhook (ADR-009); scheduler ticks, /actuator and Spring Security's own observations are not traced. `X-Request-Id` kept as caller id; error `traceId` and `X-Trace-Id` are the OTel trace id. Business metrics prefixed `paymentswitch_`; DB-backed gauges refreshed every 10s. Grafana provisioned (anonymous viewer). OpenAPI 3.1 is hand-written (`docs/openapi.yaml`, incl. webhooks) and served by a Swagger UI container (try-it-out off: requests need HMAC); `OpenApiSpecTest` fails if spec and controllers differ. Added `POST /admin/merchants/{id}/top-ups` (k6 needs balance). k6 scripts verified with a 10s smoke run only; **performance results not recorded yet** (docs/performance.md is a template). Structured ECS JSON logs in compose. |
