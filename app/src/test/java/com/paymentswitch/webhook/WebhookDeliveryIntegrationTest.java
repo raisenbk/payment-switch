@@ -111,6 +111,8 @@ class WebhookDeliveryIntegrationTest extends AbstractIntegrationTest {
         assertThat(JsonPath.<String>read(body, "$.data.id")).isEqualTo(transactionId.toString());
         assertThat(JsonPath.<String>read(body, "$.data.status")).isEqualTo("SUCCESS");
         assertThat(JsonPath.<String>read(body, "$.data.supplierRef")).startsWith("MS-");
+        // Same field order as GET /v1/transactions/{id} (the outbox stores payloads as exact json).
+        assertThat(body).contains("\"data\":{\"id\":\"" + transactionId + "\",\"merchantRef\":");
         assertThat(request.getHeader("X-Webhook-Id")).isEqualTo(eventId.toString());
         assertThat(request.getHeader("Content-Type")).startsWith("application/json");
         assertSignedWithMerchantSecret(request);

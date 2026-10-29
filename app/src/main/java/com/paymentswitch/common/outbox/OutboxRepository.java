@@ -18,7 +18,7 @@ class OutboxRepository {
     void insert(String eventType, UUID aggregateId, String payloadJson) {
         jdbc.sql("""
                         INSERT INTO outbox_events (event_type, aggregate_id, payload)
-                        VALUES (:type, :aggregateId, CAST(:payload AS jsonb))""")
+                        VALUES (:type, :aggregateId, CAST(:payload AS json))""")
                 .param("type", eventType)
                 .param("aggregateId", aggregateId)
                 .param("payload", payloadJson)

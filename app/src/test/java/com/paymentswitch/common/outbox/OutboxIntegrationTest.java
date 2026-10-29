@@ -55,7 +55,7 @@ class OutboxIntegrationTest extends AbstractIntegrationTest {
 
         await().atMost(Duration.ofSeconds(5)).until(() -> processed(committed));
         assertThat(handler.handledCount(committed)).isEqualTo(1);
-        assertThat(handler.payload(committed)).isEqualTo("{\"n\": 1}");
+        assertThat(handler.payload(committed)).isEqualTo("{\"n\":1}");
         assertThat(jdbc.sql("SELECT count(*) FROM outbox_events WHERE aggregate_id = :id")
                 .param("id", rolledBack).query(Long.class).single()).isZero();
     }
