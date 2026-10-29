@@ -68,3 +68,24 @@ only through a definitive answer, or `MANUAL_REVIEW` after the maximum window (P
   `Unknown`.
 - `TransactionFlowIntegrationTest` covers every row against the real mock-supplier: timeouts, 500
   and pending all end in UNKNOWN with the hold intact, and definitive failures release it.
+
+## Addendum (Phase 5, 2026-10-29): inquiries, escalation and late answers
+
+- **Inquiry schedule.** Entering `UNKNOWN` sets `transactions.next_inquiry_at` (first inquiry
+  after 30s) and `inquiry_deadline` (max window, 24h). `InquiryScheduler` claims due rows with
+  `FOR UPDATE SKIP LOCKED` and, in the same statement, moves `next_inquiry_at` to the next step of
+  the exponential backoff (30s, 1m, 2m, … capped at 30 min). That is both the retry plan and the
+  lease, so several instances never ask about the same transaction at the same time.
+- **Escalation.** An inquiry that is still ambiguous after the deadline moves the transaction to
+  `MANUAL_REVIEW`. The **hold is kept**: money is never refunded on a guess.
+- **Late answers are flagged, never applied and never dropped.** A definitive supplier answer can
+  contradict a final status we already set: a duplicate runner losing the compare-and-set race,
+  or a supplier that answered `404` (so we failed the transaction) while it was in fact still
+  processing. That answer is written to `transaction_discrepancies` (`LATE_SUCCESS` or
+  `LATE_FAILURE`) and logged at WARN. The status and the ledger stay untouched, because money
+  already moved and a human (or reconciliation in Phase 7) decides the correction.
+- **Verification after an inquiry failure.** Inquiry `404 → Failed` depends on the supplier
+  contract, which may be broken in practice. So a transaction that went `UNKNOWN → FAILED` is
+  inquired once more after `verify-after` (1h). If the supplier now reports `SUCCESS`, a
+  `LATE_SUCCESS` discrepancy is raised. The mock supplier's `SLOW_SUCCESS` behavior (suffix `88`)
+  reproduces this end to end.

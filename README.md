@@ -8,7 +8,7 @@ resolves ambiguous (timed-out) results safely and notifies the merchant by webho
 
 > Portfolio project. No real money, suppliers, credentials or customer data.
 
-**Status:** Phase 4 (transactions + mock supplier) — see [PLAN.md](PLAN.md) for the roadmap.
+**Status:** Phase 5 (outbox + UNKNOWN resolution) — see [PLAN.md](PLAN.md) for the roadmap.
 
 ## Quick start
 
@@ -30,10 +30,16 @@ The mock supplier's behavior is chosen by the **last two digits of the destinati
 |---|---|---|
 | anything else | success | `SUCCESS` |
 | `11` | definitive failure | `FAILED` (hold released) |
-| `22` / `33` | answers after the read timeout (then succeeds / fails) | `UNKNOWN` (hold kept) |
-| `44` | answers `PENDING` | `UNKNOWN` |
-| `55` | processes, then returns HTTP 500 | `UNKNOWN` |
+| `22` / `33` | answers after the read timeout (then succeeds / fails) | `UNKNOWN` → inquiry → `SUCCESS` / `FAILED` |
+| `44` | answers `PENDING`, completes later | `UNKNOWN` → inquiry → `SUCCESS` |
+| `55` | processes, then returns HTTP 500 | `UNKNOWN` → inquiry → `SUCCESS` |
 | `66` | rejects the request (HTTP 400) | `FAILED` |
+| `77` | answers `PENDING` forever | `UNKNOWN` → `MANUAL_REVIEW` after the max window (hold kept) |
+| `88` | processes slowly, invisible to inquiries at first | `FAILED`, then flagged as a `LATE_SUCCESS` discrepancy |
+
+The `local` profile uses a short inquiry schedule so you can watch this happen: first inquiry after
+5s, `MANUAL_REVIEW` after 2 minutes, late-success verification after 1 minute (production defaults:
+30s, 24h, 1h).
 
 ## Development
 
@@ -61,8 +67,14 @@ Transaction lifecycle:
 ```
 PENDING ─▶ PROCESSING ─▶ SUCCESS   (hold captured)
                  ├──────▶ FAILED    (hold released)
-                 └──────▶ UNKNOWN   (hold kept until an inquiry gives a definitive answer)
+                 └──────▶ UNKNOWN   (hold kept) ─inquiry─▶ SUCCESS | FAILED
+                              └─max window─▶ MANUAL_REVIEW (hold kept, operator decides)
 ```
+
+Work that must happen after a commit (calling the supplier, later webhooks) goes through a
+transactional outbox: the event is written in the same database transaction as the state change
+and picked up by a `SKIP LOCKED` poller, so a crash never loses an accepted transaction. Supplier
+answers that contradict a status we already finalised are recorded in `transaction_discrepancies`.
 
 ## Calling the API
 
@@ -102,3 +114,4 @@ Every error response has the same shape, and the trace id is also returned in `X
 - [ADR-003: Double-entry ledger instead of a mutable balance column](docs/adr/0003-double-entry-ledger.md)
 - [ADR-004: Ledger locking strategy](docs/adr/0004-ledger-locking-strategy.md)
 - [ADR-005: A supplier timeout is UNKNOWN, not FAILED](docs/adr/0005-timeout-means-unknown.md)
+- [ADR-006: Transactional outbox](docs/adr/0006-transactional-outbox.md)

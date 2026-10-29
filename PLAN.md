@@ -244,13 +244,13 @@ Legend: `[ ]` todo · `[x]` done. Each phase ends with a DoD that must be fully 
 
 ### Phase 5 — UNKNOWN Handling & Outbox (Week 5)
 
-- [ ] `outbox_events` migration; event written in the same DB transaction as the state change
-- [ ] Outbox poller with `FOR UPDATE SKIP LOCKED`; safe with multiple instances
-- [ ] Inquiry scheduler for `UNKNOWN` transactions: exponential backoff, max window, then `MANUAL_REVIEW`
-- [ ] Late supplier success after we already marked failed → detected and flagged (never silently ignored)
-- [ ] Tests: timeout → inquiry → success; timeout → inquiry → failed (hold released); timeout beyond max window → manual review
-- [ ] Test: app crash between DB commit and supplier call → outbox recovers, no duplicate supplier submission (supplier idempotency via our reference)
-- [ ] ADR-006: transactional outbox
+- [x] `outbox_events` migration; event written in the same DB transaction as the state change
+- [x] Outbox poller with `FOR UPDATE SKIP LOCKED`; safe with multiple instances
+- [x] Inquiry scheduler for `UNKNOWN` transactions: exponential backoff, max window, then `MANUAL_REVIEW`
+- [x] Late supplier success after we already marked failed → detected and flagged (never silently ignored)
+- [x] Tests: timeout → inquiry → success; timeout → inquiry → failed (hold released); timeout beyond max window → manual review
+- [x] Test: app crash between DB commit and supplier call → outbox recovers, no duplicate supplier submission (supplier idempotency via our reference)
+- [x] ADR-006: transactional outbox
 
 **DoD:** all failure scenarios above covered by automated tests using the mock supplier.
 
@@ -376,3 +376,4 @@ Rules: no `Thread.sleep` for synchronization (use Awaitility); tests must be det
 | 2026-10-28 | 2 | Idempotency key claimed with INSERT ON CONFLICT in the same DB transaction as the action (no IN_PROGRESS status; failed requests do not consume the key). `response_body` is JSON (byte-identical replays). Unsigned routes outside /v1 are denied by default. 50-parallel test verified to fail against a naive check-then-insert implementation. See ADR-002. |
 | 2026-10-28 | 3 | No stored balance at all: balances = SUM(entries), per-merchant FOR NO KEY UPDATE lock on the balance account, system accounts never locked (no hot rows). Added `ledger_holds` (hold lifecycle) and `CASH` account (counter-side of top-ups), not in the original schema. DB triggers enforce balanced single-currency journals and immutability. Ledger tests passed 10/10 runs; removing the lock makes the 1000-hold test fail (601 successes). See ADR-003/004. |
 | 2026-10-28 | 4 | POST returns 202 PENDING; supplier processing starts after commit via an async AFTER_COMMIT listener (in-memory, replaced by the outbox in Phase 5; until then a crash after commit leaves the transaction PENDING). Supplier cost frozen on the transaction at routing time. Connection refused on submit = FAILED (nothing sent); read timeout/5xx/pending = UNKNOWN; inquiry 404 = FAILED (supplier contract). mock-supplier is chosen by destination suffix; e2e tests run its real jar via Testcontainers. Local profile seeds a demo merchant + products. See ADR-005. |
+| 2026-10-29 | 5 | Outbox claim = one `UPDATE … FROM (SELECT … FOR UPDATE SKIP LOCKED)` statement that also leases the rows (available_at pushed forward), handlers run on virtual threads, retry with capped exponential backoff; at-least-once, so handlers are idempotent. Crash in PROCESSING → resubmit with the same reference (supplier dedupes, 409 + stored outcome); `supplier_sku` now frozen on the transaction for that. Inquiry schedule stored on `transactions` (next_inquiry_at/attempts/deadline), same claiming technique; MANUAL_REVIEW keeps the hold. Late answers (CAS lost against a contradicting final status, or the post-failure verification inquiry finding SUCCESS) go to `transaction_discrepancies`, never auto-applied. Added mock behaviours 77 (stuck pending) and 88 (slow success, 404 while processing). Processing now starts within one poll (250ms) instead of immediately. See ADR-006 and the ADR-005 addendum. |

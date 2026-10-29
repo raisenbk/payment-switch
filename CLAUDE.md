@@ -56,6 +56,10 @@ Actions, Micrometer + Prometheus + Grafana, OpenTelemetry, k6. Kafka/Kubernetes 
 - Transaction status changes go only through `TransactionStateMachine.transition(...)`
   (validated, compare-and-set, event row). Supplier outcomes are `SupplierResult`
   (`Success`/`Failed`/`Unknown`); anything ambiguous is `Unknown` and keeps the hold (ADR-005).
+- Work that must happen after a commit goes through the outbox: `OutboxPublisher.publish(...)` inside
+  the business transaction, plus an idempotent `OutboxHandler` bean for the event type (ADR-006).
+  Supplier answers are applied only through `SupplierOutcomes`; UNKNOWN transactions are resolved
+  by `InquiryScheduler`, and contradicting late answers go to `transaction_discrepancies`.
 - Build from the repository root: the app's integration tests run `mock-supplier/target/mock-supplier.jar`
   in a container, so `-pl app` alone needs that jar built first (`-am` or a full `verify`).
 - Local demo: `docker compose up --build -d`, then `./scripts/signed-curl.sh` (demo merchant seeded
