@@ -78,6 +78,39 @@ class SupplierControllerTest {
     }
 
     @Test
+    void stuckPendingNeverResolves() throws Exception {
+        String reference = UUID.randomUUID().toString();
+
+        assertThat(submit(reference, "081200000077")).bodyJson().extractingPath("$.status").isEqualTo("PENDING");
+        Thread.sleep(400);
+
+        assertThat(inquiry(reference)).bodyJson().extractingPath("$.status").isEqualTo("PENDING");
+    }
+
+    @Test
+    void slowSuccessIsInvisibleUntilTheDelayHasPassed() {
+        String reference = UUID.randomUUID().toString();
+
+        assertThat(inquiry(reference)).hasStatus(HttpStatus.NOT_FOUND);
+        assertThat(submit(reference, "081200000088")).bodyJson().extractingPath("$.status").isEqualTo("SUCCESS");
+
+        assertThat(inquiry(reference)).bodyJson().extractingPath("$.status").isEqualTo("SUCCESS");
+    }
+
+    @Test
+    void slowSuccessAnswersNotFoundWhileProcessing() throws Exception {
+        String reference = UUID.randomUUID().toString();
+        Thread submitting = Thread.ofVirtual().start(() -> submit(reference, "081200000088"));
+        await().atMost(Duration.ofSeconds(1)).untilAsserted(() ->
+                assertThat(submit(reference, "081200000088")).hasStatus(HttpStatus.CONFLICT));
+
+        assertThat(inquiry(reference)).hasStatus(HttpStatus.NOT_FOUND);
+
+        submitting.join();
+        assertThat(inquiry(reference)).bodyJson().extractingPath("$.status").isEqualTo("SUCCESS");
+    }
+
+    @Test
     void unknownReferenceIsNotFound() {
         assertThat(inquiry("nope")).hasStatus(HttpStatus.NOT_FOUND);
     }

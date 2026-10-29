@@ -39,7 +39,12 @@ class SupplierController {
     record SupplierResponse(String reference, String status, String supplierRef, String errorCode) {
     }
 
-    private record Record(String reference, String status, String supplierRef, String errorCode, Instant completeAt) {
+    /**
+     * @param completeAt when a PENDING record turns SUCCESS (null: never changes)
+     * @param visibleAt  inquiries answer 404 before this time (null: visible immediately)
+     */
+    private record Record(String reference, String status, String supplierRef, String errorCode, Instant completeAt,
+            Instant visibleAt) {
 
         SupplierResponse toResponse() {
             return new SupplierResponse(reference, status, supplierRef, errorCode);
@@ -63,7 +68,7 @@ class SupplierController {
         }
 
         return switch (behavior) {
-            case TIMEOUT_THEN_SUCCESS, TIMEOUT_THEN_FAIL -> {
+            case TIMEOUT_THEN_SUCCESS, TIMEOUT_THEN_FAIL, SLOW_SUCCESS -> {
                 Thread.sleep(properties.delay());
                 yield ResponseEntity.ok(created.toResponse());
             }
@@ -75,16 +80,22 @@ class SupplierController {
     @GetMapping("/suppliers/{supplier}/transactions/{reference}")
     ResponseEntity<SupplierResponse> inquiry(@PathVariable String supplier, @PathVariable String reference) {
         Record record = current(supplier + ":" + reference);
-        return record == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(record.toResponse());
+        if (record == null || (record.visibleAt() != null && clock.instant().isBefore(record.visibleAt()))) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(record.toResponse());
     }
 
     private Record initialRecord(String reference, Behavior behavior) {
         String supplierRef = "MS-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         return switch (behavior) {
-            case FAIL, TIMEOUT_THEN_FAIL -> new Record(reference, "FAILED", null, "INVALID_DESTINATION", null);
-            case PENDING_THEN_SUCCESS ->
-                    new Record(reference, "PENDING", supplierRef, null, clock.instant().plus(properties.delay()));
-            default -> new Record(reference, "SUCCESS", supplierRef, null, null);
+            case FAIL, TIMEOUT_THEN_FAIL -> new Record(reference, "FAILED", null, "INVALID_DESTINATION", null, null);
+            case PENDING_THEN_SUCCESS -> new Record(reference, "PENDING", supplierRef, null,
+                    clock.instant().plus(properties.delay()), null);
+            case STUCK_PENDING -> new Record(reference, "PENDING", supplierRef, null, null, null);
+            case SLOW_SUCCESS -> new Record(reference, "SUCCESS", supplierRef, null, null,
+                    clock.instant().plus(properties.delay()));
+            default -> new Record(reference, "SUCCESS", supplierRef, null, null, null);
         };
     }
 
@@ -92,7 +103,7 @@ class SupplierController {
     private Record current(String key) {
         return records.computeIfPresent(key, (k, record) ->
                 record.completeAt() != null && !clock.instant().isBefore(record.completeAt())
-                        ? new Record(record.reference(), "SUCCESS", record.supplierRef(), null, null)
+                        ? new Record(record.reference(), "SUCCESS", record.supplierRef(), null, null, null)
                         : record);
     }
 }

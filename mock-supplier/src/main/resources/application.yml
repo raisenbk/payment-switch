@@ -32,3 +32,7 @@ mock-supplier:
       behavior: SERVER_ERROR_AFTER_SUCCESS
     - destination-suffix: "66"
       behavior: REJECT
+    - destination-suffix: "77"
+      behavior: STUCK_PENDING
+    - destination-suffix: "88"
+      behavior: SLOW_SUCCESS

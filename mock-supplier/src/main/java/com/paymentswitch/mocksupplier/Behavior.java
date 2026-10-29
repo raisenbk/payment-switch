@@ -15,5 +15,13 @@ public enum Behavior {
     /** Processes successfully, then answers 500: the classic ambiguous result. */
     SERVER_ERROR_AFTER_SUCCESS,
     /** 400 without processing: the request itself was rejected. */
-    REJECT
+    REJECT,
+    /** 200 PENDING, and inquiries keep answering PENDING: a supplier that never resolves. */
+    STUCK_PENDING,
+    /**
+     * Processes slowly: the caller times out, and inquiries answer 404 until the delay has passed,
+     * then SUCCESS. Breaks the "every accepted submit is queryable" contract, so the switch fails the
+     * transaction first and must detect the late success.
+     */
+    SLOW_SUCCESS
 }
