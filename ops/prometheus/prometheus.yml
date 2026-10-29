@@ -1,0 +1,10 @@
+# Scrapes the payment switch inside the compose network.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: payment-switch
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["app:8080"]
