@@ -2,6 +2,7 @@ package com.paymentswitch;
 
 import com.paymentswitch.support.IdempotencyProbeController;
 import com.paymentswitch.support.LedgerAssertions;
+import com.paymentswitch.support.RecordingOutboxHandler;
 import com.paymentswitch.support.TestCatalog;
 import com.paymentswitch.support.TestMerchants;
 import java.net.URI;
@@ -34,11 +35,12 @@ import org.testcontainers.utility.MountableFile;
  */
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import({TestMerchants.class, TestCatalog.class, IdempotencyProbeController.class, LedgerAssertions.class})
+@Import({TestMerchants.class, TestCatalog.class, IdempotencyProbeController.class, LedgerAssertions.class,
+        RecordingOutboxHandler.class})
 public abstract class AbstractIntegrationTest {
 
     /** Slow mock-supplier behaviours take this long; the app's read timeout in tests is 1s. */
-    protected static final Duration SUPPLIER_DELAY = Duration.ofSeconds(2);
+    protected static final Duration SUPPLIER_DELAY = Duration.ofSeconds(3);
 
     private static final int MOCK_SUPPLIER_PORT = 8090;
 

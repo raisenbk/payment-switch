@@ -9,6 +9,18 @@ payment-switch:
       # base-url is set by AbstractIntegrationTest (mock-supplier container)
       connect-timeout: 1s
       read-timeout: 1s
+  # Fast schedules so failure scenarios finish in seconds (production defaults are in the
+  # *Properties records).
+  outbox:
+    poll-interval: 100ms
+    lease: 10s
+    retry-initial-delay: 200ms
+  inquiry:
+    poll-interval: 100ms
+    initial-delay: 300ms
+    max-delay: 1s
+    max-window: 6s
+    verify-after: 3s
   crypto:
     # Test-only key. Never used outside the test profile.
     secret-key: 7L/6T3v6cowfXHu0UvIU4He4pU1J7F2JeHdUD0TZtgk=

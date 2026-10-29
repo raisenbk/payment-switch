@@ -1,10 +1,13 @@
 package com.paymentswitch.common.config;
 
 import org.springframework.context.annotation.Configuration;
-import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
-/** Enables {@code @Async}; Spring Boot's task executor runs on virtual threads (spring.threads.virtual). */
+/**
+ * Enables {@code @Scheduled} pollers (outbox, inquiries). With spring.threads.virtual enabled,
+ * Spring Boot runs each scheduled task on a virtual thread.
+ */
 @Configuration
-@EnableAsync
-public class AsyncConfig {
+@EnableScheduling
+public class SchedulingConfig {
 }

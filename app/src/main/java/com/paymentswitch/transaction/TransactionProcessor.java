@@ -3,8 +3,6 @@ package com.paymentswitch.transaction;
 import static com.paymentswitch.transaction.TransactionStatus.FAILED;
 import static com.paymentswitch.transaction.TransactionStatus.PENDING;
 import static com.paymentswitch.transaction.TransactionStatus.PROCESSING;
-import static com.paymentswitch.transaction.TransactionStatus.SUCCESS;
-import static com.paymentswitch.transaction.TransactionStatus.UNKNOWN;
 
 import com.paymentswitch.common.money.Money;
 import com.paymentswitch.ledger.LedgerService;
@@ -28,13 +26,21 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Drives one PENDING transaction through the supplier:
+ * Drives one accepted transaction through the supplier:
  * <ol>
  *   <li>DB tx 1: route, PENDING → PROCESSING (commit before calling out).</li>
  *   <li>Supplier call, outside any DB transaction.</li>
- *   <li>DB tx 2: apply the result. SUCCESS captures the hold, FAILED releases it, UNKNOWN keeps it.</li>
+ *   <li>DB tx 2: apply the result through {@link SupplierOutcomes}.</li>
  * </ol>
- * Safe to call more than once: only the caller that wins PENDING → PROCESSING submits.
+ * Runs from the outbox, so it may run more than once for the same transaction (ADR-006):
+ * <ul>
+ *   <li>PENDING: only the caller that wins PENDING → PROCESSING submits.</li>
+ *   <li>PROCESSING: an earlier run committed step 1 and then stopped (crash) before step 3. We cannot
+ *       know whether its request reached the supplier, so we submit again with the same reference.
+ *       The supplier deduplicates on it and answers with its stored outcome, so the customer is never
+ *       topped up twice.</li>
+ *   <li>Anything else: already handled, nothing to do.</li>
+ * </ul>
  */
 @Component
 class TransactionProcessor {
@@ -46,30 +52,34 @@ class TransactionProcessor {
     private final SupplierRouter router;
     private final SupplierGateways gateways;
     private final LedgerService ledger;
+    private final SupplierOutcomes outcomes;
     private final TransactionTemplate transaction;
 
     TransactionProcessor(TransactionRepository repository, TransactionStateMachine stateMachine,
-            SupplierRouter router, SupplierGateways gateways, LedgerService ledger,
+            SupplierRouter router, SupplierGateways gateways, LedgerService ledger, SupplierOutcomes outcomes,
             PlatformTransactionManager transactionManager) {
         this.repository = repository;
         this.stateMachine = stateMachine;
         this.router = router;
         this.gateways = gateways;
         this.ledger = ledger;
+        this.outcomes = outcomes;
         this.transaction = new TransactionTemplate(transactionManager);
     }
 
     void process(UUID transactionId) {
         MDC.put("transactionId", transactionId.toString());
         try {
-            Optional<Dispatch> dispatch = transaction.execute(status -> startProcessing(transactionId));
+            Optional<Dispatch> dispatch = transaction.execute(status -> prepare(transactionId));
             if (dispatch.isEmpty()) {
                 return;
             }
             Dispatch d = dispatch.get();
-            SupplierResult result = d.gateway.submit(new SupplierRequest(
-                    transactionId.toString(), d.route.supplierSku(), d.row.destination(), d.row.amount()));
-            transaction.executeWithoutResult(status -> applyResult(transactionId, d.route, result));
+            SupplierResult result = d.gateway
+                    .map(gateway -> gateway.submit(new SupplierRequest(
+                            transactionId.toString(), d.supplierSku, d.destination, d.amount)))
+                    .orElseGet(() -> new SupplierResult.Unknown("CANNOT_RESUBMIT"));
+            outcomes.applySubmitResult(transactionId, d.supplierCode, result, d.resubmit);
         } catch (ConcurrentTransitionException e) {
             log.info("Transaction already being handled elsewhere: {}", e.getMessage());
         } finally {
@@ -78,47 +88,46 @@ class TransactionProcessor {
         }
     }
 
-    private Optional<Dispatch> startProcessing(UUID transactionId) {
+    private Optional<Dispatch> prepare(UUID transactionId) {
         TransactionRow row = repository.findById(transactionId).orElseThrow();
-        if (row.status() != PENDING) {
-            return Optional.empty();
-        }
         MDC.put("merchantId", row.merchantId().toString());
+        return switch (row.status()) {
+            case PENDING -> route(row);
+            case PROCESSING -> resume(row);
+            default -> Optional.empty();
+        };
+    }
+
+    private Optional<Dispatch> route(TransactionRow row) {
         Optional<Route> route = router.route(row.productId(), Money.of(row.amount(), row.currency()));
         Optional<SupplierGateway> gateway = route.flatMap(r -> gateways.forSupplier(r.supplierCode()));
         if (gateway.isEmpty()) {
             // Nothing was sent anywhere, so failing (and releasing the hold) is safe.
-            stateMachine.transition(transactionId, PENDING, PROCESSING, StatusChange.NONE, Map.of());
-            stateMachine.transition(transactionId, PROCESSING, FAILED, StatusChange.failed("NO_ROUTE"),
+            stateMachine.transition(row.id(), PENDING, PROCESSING, StatusChange.NONE, Map.of());
+            stateMachine.transition(row.id(), PROCESSING, FAILED, StatusChange.failed("NO_ROUTE"),
                     Map.of("reason", route.isEmpty() ? "no eligible supplier" : "supplier not configured"));
-            ledger.release(transactionId);
+            ledger.release(row.id());
             return Optional.empty();
         }
-        stateMachine.transition(transactionId, PENDING, PROCESSING,
-                StatusChange.routed(route.get().supplierId(), route.get().cost().amount()),
-                Map.of("supplier", route.get().supplierCode(), "sku", route.get().supplierSku()));
-        return Optional.of(new Dispatch(row, route.get(), gateway.get()));
+        Route r = route.get();
+        stateMachine.transition(row.id(), PENDING, PROCESSING,
+                StatusChange.routed(r.supplierId(), r.cost().amount(), r.supplierSku()),
+                Map.of("supplier", r.supplierCode(), "sku", r.supplierSku()));
+        return Optional.of(new Dispatch(r.supplierCode(), r.supplierSku(), row.destination(), row.amount(),
+                gateway, false));
     }
 
-    private void applyResult(UUID transactionId, Route route, SupplierResult result) {
-        switch (result) {
-            case SupplierResult.Success success -> {
-                stateMachine.transition(transactionId, PROCESSING, SUCCESS,
-                        StatusChange.succeeded(success.supplierRef()), Map.of("supplier", route.supplierCode()));
-                ledger.capture(transactionId, route.supplierId(), route.cost());
-            }
-            case SupplierResult.Failed failed -> {
-                stateMachine.transition(transactionId, PROCESSING, FAILED, StatusChange.failed(failed.code()),
-                        Map.of("supplier", route.supplierCode(), "code", failed.code()));
-                ledger.release(transactionId);
-            }
-            case SupplierResult.Unknown unknown ->
-                    // Timeout != failure: keep the hold until an inquiry gives a definitive answer.
-                    stateMachine.transition(transactionId, PROCESSING, UNKNOWN, StatusChange.NONE,
-                            Map.of("supplier", route.supplierCode(), "reason", unknown.reason()));
-        }
+    private Optional<Dispatch> resume(TransactionRow row) {
+        log.warn("Transaction {} found in PROCESSING; resubmitting to {} with the same reference",
+                row.id(), row.supplierCode());
+        // Rows routed before supplier_sku existed cannot be rebuilt; they go to UNKNOWN and inquiry.
+        Optional<SupplierGateway> gateway = row.supplierSku() == null
+                ? Optional.empty() : gateways.forSupplier(row.supplierCode());
+        return Optional.of(new Dispatch(row.supplierCode(), row.supplierSku(), row.destination(), row.amount(),
+                gateway, true));
     }
 
-    private record Dispatch(TransactionRow row, Route route, SupplierGateway gateway) {
+    private record Dispatch(String supplierCode, String supplierSku, String destination, long amount,
+            Optional<SupplierGateway> gateway, boolean resubmit) {
     }
 }

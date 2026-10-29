@@ -4,81 +4,31 @@ import static com.paymentswitch.support.SignedRequests.send;
 import static com.paymentswitch.support.SignedRequests.signed;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.awaitility.Awaitility.await;
 
 import com.jayway.jsonpath.JsonPath;
-import com.paymentswitch.AbstractIntegrationTest;
-import com.paymentswitch.common.money.Money;
 import com.paymentswitch.ledger.Balance;
-import com.paymentswitch.ledger.LedgerService;
-import com.paymentswitch.support.LedgerAssertions;
-import com.paymentswitch.support.TestCatalog;
 import com.paymentswitch.support.TestCatalog.TestProduct;
-import com.paymentswitch.support.TestMerchants;
 import com.paymentswitch.support.TestMerchants.TestMerchant;
 import com.paymentswitch.transaction.TransactionRepository.StatusChange;
 import com.paymentswitch.transaction.TransactionStateMachine.ConcurrentTransitionException;
 import com.paymentswitch.transaction.TransactionStateMachine.IllegalTransitionException;
 import java.net.http.HttpResponse;
-import java.time.Duration;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * End to end: signed HTTP request → transaction + hold → async processing → real mock-supplier
- * (in a container) → final status, ledger effect and complete event history.
+ * End to end: signed HTTP request → transaction + hold + outbox event → outbox poller → real
+ * mock-supplier (in a container) → final status, ledger effect and complete event history.
+ * Ambiguous results are covered by {@link UnknownResolutionIntegrationTest}.
  */
-class TransactionFlowIntegrationTest extends AbstractIntegrationTest {
-
-    private static final long PRICE = 10_500;
-    private static final long SUPPLIER_COST = 10_000;
-    private static final long STARTING_BALANCE = 100_000;
-
-    @Autowired
-    TestMerchants merchants;
-
-    @Autowired
-    TestCatalog catalog;
-
-    @Autowired
-    LedgerService ledger;
-
-    @Autowired
-    LedgerAssertions invariants;
-
-    @Autowired
-    JdbcClient jdbc;
+class TransactionFlowIntegrationTest extends AbstractTransactionIntegrationTest {
 
     @Autowired
     TransactionStateMachine stateMachine;
-
-    @Autowired
-    PlatformTransactionManager transactionManager;
-
-    TestMerchant merchant;
-    TestProduct product;
-
-    @BeforeEach
-    void setUp() {
-        merchant = merchants.create();
-        ledger.topUp(merchant.id(), idr(STARTING_BALANCE), "seed");
-        product = catalog.productSuppliedByMockA(PRICE, SUPPLIER_COST);
-    }
-
-    @AfterEach
-    void booksStayBalanced() {
-        invariants.assertGlobalInvariants();
-    }
 
     @Test
     void successCapturesTheHold() {
@@ -109,22 +59,6 @@ class TransactionFlowIntegrationTest extends AbstractIntegrationTest {
         assertThat(JsonPath.<String>read(done, "$.failureCode")).isEqualTo(failureCode);
         assertThat(balance()).isEqualTo(new Balance(idr(STARTING_BALANCE), idr(0)));
         assertThat(transitions(id)).containsExactly("->PENDING", "PENDING->PROCESSING", "PROCESSING->FAILED");
-    }
-
-    @ParameterizedTest(name = "destination {0} -> UNKNOWN ({1})")
-    @CsvSource({
-            "081234560022, READ_TIMEOUT",
-            "081234560033, READ_TIMEOUT",
-            "081234560044, SUPPLIER_PENDING",
-            "081234560055, SUPPLIER_HTTP_500"})
-    void ambiguousResultIsUnknownAndKeepsTheHold(String destination, String reason) {
-        UUID id = idOf(create(destination));
-
-        awaitStatus(id, "UNKNOWN");
-
-        assertThat(balance()).isEqualTo(new Balance(idr(STARTING_BALANCE - PRICE), idr(PRICE)));
-        assertThat(transitions(id)).containsExactly("->PENDING", "PENDING->PROCESSING", "PROCESSING->UNKNOWN");
-        assertThat(lastEventPayload(id)).contains("\"reason\": \"" + reason + "\"");
     }
 
     @Test
@@ -205,7 +139,7 @@ class TransactionFlowIntegrationTest extends AbstractIntegrationTest {
     void illegalOrStaleTransitionsAreRejected() {
         UUID id = idOf(create("081234560000"));
         awaitStatus(id, "SUCCESS");
-        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        var tx = transaction();
 
         assertThatThrownBy(() -> tx.executeWithoutResult(s -> stateMachine.transition(
                 id, TransactionStatus.SUCCESS, TransactionStatus.FAILED, StatusChange.NONE, Map.of())))
@@ -214,75 +148,5 @@ class TransactionFlowIntegrationTest extends AbstractIntegrationTest {
                 id, TransactionStatus.PROCESSING, TransactionStatus.FAILED, StatusChange.NONE, Map.of())))
                 .isInstanceOf(ConcurrentTransitionException.class);
         assertThat(transitions(id)).hasSize(3);
-    }
-
-    private HttpResponse<String> create(String destination) {
-        return create(destination, product.code(), "ref-" + UUID.randomUUID(), UUID.randomUUID().toString());
-    }
-
-    private HttpResponse<String> create(String destination, String productCode, String merchantRef, String key) {
-        return send(signed(baseUri(), merchant, "POST", "/v1/transactions", body(merchantRef, productCode, destination))
-                .header("Idempotency-Key", key)
-                .build());
-    }
-
-    private static String body(String merchantRef, String productCode, String destination) {
-        return """
-                {"merchantRef":"%s","productCode":"%s","destination":"%s"}"""
-                .formatted(merchantRef, productCode, destination);
-    }
-
-    private String awaitStatus(UUID id, String status) {
-        String[] last = new String[1];
-        await().atMost(SUPPLIER_DELAY.plus(Duration.ofSeconds(8))).untilAsserted(() -> {
-            HttpResponse<String> response = send(signed(baseUri(), merchant, "GET", "/v1/transactions/" + id, "")
-                    .build());
-            last[0] = response.body();
-            assertThat(JsonPath.<String>read(response.body(), "$.status")).isEqualTo(status);
-        });
-        return last[0];
-    }
-
-    private Balance balance() {
-        return ledger.getBalance(merchant.id(), "IDR");
-    }
-
-    private List<String> transitions(UUID id) {
-        return jdbc.sql("""
-                        SELECT COALESCE(from_status, '') || '->' || to_status
-                          FROM transaction_events WHERE transaction_id = :id ORDER BY id""")
-                .param("id", id)
-                .query(String.class)
-                .list();
-    }
-
-    private String lastEventPayload(UUID id) {
-        return jdbc.sql("""
-                        SELECT payload::text FROM transaction_events
-                         WHERE transaction_id = :id ORDER BY id DESC LIMIT 1""")
-                .param("id", id)
-                .query(String.class)
-                .single();
-    }
-
-    private List<String> ledgerEntries(UUID transactionId, String kind) {
-        return jdbc.sql("""
-                        SELECT a.type || ' ' || e.direction || ' ' || e.amount
-                          FROM ledger_entries e
-                          JOIN ledger_journals j ON j.id = e.journal_id
-                          JOIN ledger_accounts a ON a.id = e.account_id
-                         WHERE j.transaction_id = :tx AND j.kind = :kind""")
-                .param("tx", transactionId)
-                .param("kind", kind)
-                .query(String.class)
-                .list();
-    }
-
-    private static UUID idOf(HttpResponse<String> response) {
-        return UUID.fromString(JsonPath.read(response.body(), "$.id"));
-    }
-
-    private static Money idr(long amount) {
-        return Money.of(amount, "IDR");
     }
 }
